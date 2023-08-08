@@ -114,7 +114,7 @@ impl DirectIoBackend {
 
         self.schedule_task(Box::new(task)).await?;
 
-        rx.await.map_err(|e| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error())?
     }
 
     #[instrument("open-reader", skip(self))]
@@ -134,12 +134,12 @@ impl DirectIoBackend {
 
         self.schedule_task(Box::new(task)).await?;
 
-        rx.await.map_err(|e| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error())?
     }
 
     async fn schedule_task(&self, op: BoxedTask) -> io::Result<()> {
         self.task_submitter
-            .send(op)
+            .send_async(op)
             .await
             .map_err(|_| lost_contact_error())
     }
@@ -157,7 +157,7 @@ async fn spawn_executor_thread(
     let handle = LocalExecutorBuilder::new(Placement::Unbound)
         .io_memory(config.io_memory)
         .name(&name)
-        .spawn(move || executor_parent_task(shard_id, tasks_rx, waiter_tx))
+        .spawn(move || executor_task(shard_id, tasks_rx, waiter_tx))
         .expect("Spawn local executor");
 
     if waiter_rx.await.is_err() {

@@ -16,6 +16,7 @@ tachyonix = "0.2.0"
 memmap2 = "0.6.2"
 num_cpus = "1.15.0"
 rayon = "1.7.0"
+xorf = "0.8.1"
 
 rkyv = { version = "0.7.42", features = ["strict", "archive_le"] }
 tokio = { version = "1", default-features = false, features = ["sync", "fs", "io-util"] }

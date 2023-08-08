@@ -25,13 +25,21 @@ impl Task for ReaderTask {
     async fn spawn(self) {
         let (tx, rx) = tachyonix::channel(5);
 
-        let actor = ReaderActor::open(
+        let res = ReaderActor::open(
             self.file_key,
             &self.path,
             rx,
             self.global_limiter.clone(),
         )
-        .await?;
+        .await;
+
+        let actor = match res {
+            Ok(actor) => actor,
+            Err(e) => {
+                let _ = self.tx.send(Err(e));
+                return;
+            },
+        };
 
         glommio::spawn_local(actor.run()).detach();
 
@@ -85,7 +93,8 @@ impl ReaderActor {
         ops: ReadOpRx,
         global_limiter: Arc<Semaphore>,
     ) -> io::Result<Self> {
-        let file = Rc::new(DmaFile::open(path)?);
+        let file = DmaFile::open(path).await?;
+        let file = Rc::new(file);
         Ok(Self {
             file_key,
             file,
@@ -116,7 +125,7 @@ impl ReaderActor {
             }
         }
 
-        if let Err(e) = self.file.close().await {
+        if let Err(e) = self.file.close_rc().await {
             warn!(error = ?e, "Reader failed to close file");
         }
     }

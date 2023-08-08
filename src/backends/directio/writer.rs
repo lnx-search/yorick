@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -6,8 +5,8 @@ use futures_lite::AsyncWriteExt;
 use glommio::io::{DmaStreamWriter, DmaStreamWriterBuilder, OpenOptions};
 use tokio::sync::oneshot;
 
+use super::WriteBuffer;
 use crate::backends::directio::{lost_contact_error, Task};
-use crate::backends::WriteBuffer;
 use crate::{BlobHeader, FileKey};
 
 type WriteOpTx = tachyonix::Sender<IoOp>;
@@ -44,14 +43,14 @@ impl WriterMailbox {
     pub async fn close(&self) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::Close { tx }).await?;
-        rx.await.map_err(|e| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error())?
     }
 
     /// Flushes the buffers of the writer to disk, returning the position in bytes.
     pub async fn sync(&self) -> io::Result<u64> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::Sync { tx }).await?;
-        rx.await.map_err(|e| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error())?
     }
 
     /// Writes a given blob to the currently open file.
@@ -62,7 +61,7 @@ impl WriterMailbox {
     ) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::WriteBlob { header, buffer, tx }).await?;
-        rx.await.map_err(|e| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error())?
     }
 
     async fn send_op(&self, op: IoOp) -> io::Result<()> {

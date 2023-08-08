@@ -4,7 +4,7 @@ extern crate tracing;
 use std::hash::{Hash, Hasher};
 
 mod backends;
-mod utils;
+mod file_filter;
 
 #[cfg(feature = "direct-io-backend")]
 pub use backends::DirectIoConfig;

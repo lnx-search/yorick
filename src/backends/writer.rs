@@ -28,7 +28,7 @@ impl FileWriter {
             },
             #[cfg(feature = "direct-io-backend")]
             FileWriterInner::DirectIo(writer) => {
-                let buffer = WriteBuffer::new(buffer);
+                let buffer = directio::WriteBuffer::new(buffer);
                 writer.write_blob(header, buffer).await
             },
         }
@@ -41,7 +41,10 @@ impl FileWriter {
         match &self.inner {
             FileWriterInner::Buffered(writer) => writer.sync().await,
             #[cfg(feature = "direct-io-backend")]
-            FileWriterInner::DirectIo(writer) => writer.sync().await,
+            FileWriterInner::DirectIo(writer) => {
+                writer.sync().await?;
+                Ok(())
+            },
         }
     }
 
