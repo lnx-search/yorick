@@ -1,0 +1,38 @@
+[package]
+name = "yorick"
+version = "0.1.0"
+edition = "2021"
+description = "For digging blocks of data into the disk."
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = "0.1.68"
+tracing = "0.1.37"
+tracing-futures = "0.2.5"
+futures-lite = "1.13.0"
+flume = "0.10.14"
+tachyonix = "0.2.0"
+memmap2 = "0.6.2"
+num_cpus = "1.15.0"
+rayon = "1.7.0"
+
+rkyv = { version = "0.7.42", features = ["strict", "archive_le"] }
+tokio = { version = "1", default-features = false, features = ["sync", "fs", "io-util"] }
+
+glommio = { version = "0.8.0", optional = true }
+
+[features]
+default = ["rkyv_size_32"]
+# Enables support for direct IO, typically improving performance
+# and resource usage.
+# This feature is only useful if you are running on modern NVMe drives
+# this can hurt performance for older types of disk.
+direct-io-backend = ["glommio"]
+# When enabled, reads will produce buffers aligned to 16 bytes.
+aligned-reads = []
+# Enables `rkyv` `size_32` feature, treating `usize` values as 32 bit ints.
+# This is enabled by default.
+rkyv_size_32 = ["rkyv/size_32"]
+# Enables `rkyv` `size_64` feature, treating `usize` values as 64 bit ints.
+rkyv_size_64 = ["rkyv/size_64"]
