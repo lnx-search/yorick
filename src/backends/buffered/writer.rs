@@ -93,7 +93,7 @@ impl WriterInner {
         self.writer.write_all(buffer).await?;
         self.cursor += buffer.len();
 
-        Ok(WriteId::new(self.file_key, self.cursor))
+        Ok(WriteId::new(self.file_key, self.cursor as u64))
     }
 
     async fn sync(&mut self) -> io::Result<()> {

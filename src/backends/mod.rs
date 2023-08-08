@@ -10,11 +10,11 @@ mod directio;
 mod reader;
 mod writer;
 
-pub use buffered::BufferedIoConfig;
+pub use self::buffered::BufferedIoConfig;
 #[cfg(feature = "direct-io-backend")]
-pub use directio::DirectIoConfig;
-pub use reader::FileReader;
-pub use writer::FileWriter;
+pub use self::directio::DirectIoConfig;
+pub use self::reader::FileReader;
+pub use self::writer::FileWriter;
 
 #[cfg(not(feature = "aligned-reads"))]
 /// The inner buffer used by reads with no alignment guarantees.

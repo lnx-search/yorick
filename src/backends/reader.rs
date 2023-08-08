@@ -9,7 +9,7 @@ use crate::backends::{buffered, ReadBuffer};
 
 #[derive(Clone)]
 /// A cheap to clone reader for a file.
-/// 
+///
 /// This is optimised for random-access not sequential access.
 pub struct FileReader {
     closed: Arc<AtomicBool>,

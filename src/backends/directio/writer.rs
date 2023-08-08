@@ -139,8 +139,7 @@ impl WriterActor {
                 if let Err(e) = res {
                     let _ = tx.send(Err(e));
                 } else {
-                    let id =
-                        WriteId::new(self.file_key, self.writer.current_pos() as usize);
+                    let id = WriteId::new(self.file_key, self.writer.current_pos());
                     let _ = tx.send(Ok(id));
                 }
             },

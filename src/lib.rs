@@ -8,14 +8,14 @@ mod index;
 mod merge;
 
 #[cfg(feature = "direct-io-backend")]
-pub use backends::DirectIoConfig;
-pub use backends::{BufferedIoConfig, FileReader, FileWriter, StorageBackend};
+pub use self::backends::DirectIoConfig;
+pub use self::backends::{BufferedIoConfig, FileReader, FileWriter, StorageBackend};
+pub use self::index::{BlobIndex, BlobInfo};
 
 /// The unique ID for a given blob.
 pub type BlobId = u64;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-#[repr(transparent)]
 /// A unique identifier for a given file.
 pub struct FileKey(pub(crate) u16);
 impl Hash for FileKey {
@@ -34,11 +34,11 @@ pub struct WriteId {
     /// If our key is bigger than another, we know our ID is more recent.
     file_key: FileKey,
     /// The position of the cursor at the point of creating the ID.
-    pos: usize,
+    pos: u64,
 }
 
 impl WriteId {
-    pub(crate) fn new(file_key: FileKey, pos: usize) -> Self {
+    pub(crate) fn new(file_key: FileKey, pos: u64) -> Self {
         Self { file_key, pos }
     }
 }
