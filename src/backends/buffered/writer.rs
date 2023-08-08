@@ -1,4 +1,5 @@
 use std::io;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -6,7 +7,7 @@ use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Mutex;
 
-use crate::{BlobHeader, FileKey};
+use crate::{BlobHeader, FileKey, WriteId};
 
 #[derive(Clone)]
 /// A buffered IO writer.
@@ -14,16 +15,20 @@ use crate::{BlobHeader, FileKey};
 /// This internally wraps a tokio [File] and a [BufWriter].
 pub struct Writer {
     file_key: FileKey,
-    file: Arc<Mutex<BufWriter<File>>>,
+    file: Arc<Mutex<WriterInner>>,
 }
 
 impl Writer {
     #[instrument("open-or-create-writer")]
     /// Opens or creates a given file located at the file path.
-    pub(crate) async fn open_or_create(
-        file_key: FileKey,
-        path: &Path,
-    ) -> io::Result<Self> {
+    pub(crate) async fn create(file_key: FileKey, path: &Path) -> io::Result<Self> {
+        if path.exists() {
+            return Err(io::Error::new(
+                ErrorKind::AlreadyExists,
+                format!("File {} already exists", path.display()),
+            ));
+        }
+
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -31,25 +36,67 @@ impl Writer {
             .open(path)
             .await?;
 
+        let inner = WriterInner {
+            file_key,
+            writer: BufWriter::new(file),
+            cursor: 0,
+        };
+
         Ok(Self {
             file_key,
-            file: Arc::new(Mutex::new(BufWriter::new(file))),
+            file: Arc::new(Mutex::new(inner)),
         })
     }
 
     #[instrument("writer", skip_all, fields(file_key = ?self.file_key))]
     /// Writes a given blob to the currently open file.
-    pub async fn write_blob(&self, header: BlobHeader, buffer: &[u8]) -> io::Result<()> {
+    pub async fn write_blob(
+        &self,
+        header: BlobHeader,
+        buffer: &[u8],
+    ) -> io::Result<WriteId> {
         let mut lock = self.file.lock().await;
-        lock.write_all(header.as_bytes()).await?;
-        lock.write_all(buffer).await?;
-        Ok(())
+        lock.write_blob(header, buffer).await.map_err(|e| {
+            error!(error = ?e, "Failed to write blob");
+            e
+        })
     }
 
+    #[instrument("writer", skip_all, fields(file_key = ?self.file_key))]
     /// Flushes the buffers of the writer to disk.
     pub async fn sync(&self) -> io::Result<()> {
         let mut lock = self.file.lock().await;
-        lock.get_mut().sync_data().await?;
+        lock.sync().await.map_err(|e| {
+            error!(error = ?e, "Failed to flush data to disk");
+            e
+        })?;
         Ok(())
+    }
+}
+
+struct WriterInner {
+    file_key: FileKey,
+    writer: BufWriter<File>,
+    cursor: usize,
+}
+
+impl WriterInner {
+    async fn write_blob(
+        &mut self,
+        header: BlobHeader,
+        buffer: &[u8],
+    ) -> io::Result<WriteId> {
+        let header = header.as_bytes();
+        self.writer.write_all(header).await?;
+        self.cursor += header.len();
+
+        self.writer.write_all(buffer).await?;
+        self.cursor += buffer.len();
+
+        Ok(WriteId::new(self.file_key, self.cursor))
+    }
+
+    async fn sync(&mut self) -> io::Result<()> {
+        self.writer.get_mut().sync_data().await
     }
 }

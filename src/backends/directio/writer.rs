@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 
 use super::WriteBuffer;
 use crate::backends::directio::{lost_contact_error, Task};
-use crate::{BlobHeader, FileKey};
+use crate::{BlobHeader, FileKey, WriteId};
 
 type WriteOpTx = tachyonix::Sender<IoOp>;
 type WriteOpRx = tachyonix::Receiver<IoOp>;
@@ -23,7 +23,7 @@ impl Task for WriterTask {
     async fn spawn(self) {
         let (tx, rx) = tachyonix::channel(5);
 
-        let actor = WriterActor::open_or_create(self.file_key, &self.path, rx).await;
+        let actor = WriterActor::create(self.file_key, &self.path, rx).await;
 
         glommio::spawn_local(actor.run()).detach();
 
@@ -58,7 +58,7 @@ impl WriterMailbox {
         &self,
         header: BlobHeader,
         buffer: WriteBuffer,
-    ) -> io::Result<()> {
+    ) -> io::Result<WriteId> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::WriteBlob { header, buffer, tx }).await?;
         rx.await.map_err(|_| lost_contact_error())?
@@ -88,11 +88,7 @@ pub struct WriterActor {
 impl WriterActor {
     #[instrument("open-or-create-writer")]
     /// Opens or creates a given file located at the file path.
-    async fn open_or_create(
-        file_key: FileKey,
-        path: &Path,
-        rx: WriteOpRx,
-    ) -> io::Result<Self> {
+    async fn create(file_key: FileKey, path: &Path, rx: WriteOpRx) -> io::Result<Self> {
         let file = OpenOptions::new()
             .create(true)
             .read(true)
@@ -133,14 +129,20 @@ impl WriterActor {
             IoOp::WriteBlob { header, buffer, tx } => {
                 let res = self.writer.write_all(header.as_bytes()).await;
                 maybe_log_err!(res);
-                if res.is_err() {
-                    let _ = tx.send(res);
+                if let Err(e) = res {
+                    let _ = tx.send(Err(e));
                     return;
                 }
 
                 let res = self.writer.write_all(buffer.as_ref()).await;
                 maybe_log_err!(res);
-                let _ = tx.send(res);
+                if let Err(e) = res {
+                    let _ = tx.send(Err(e));
+                } else {
+                    let id =
+                        WriteId::new(self.file_key, self.writer.current_pos() as usize);
+                    let _ = tx.send(Ok(id));
+                }
             },
             IoOp::Sync { tx } => {
                 let res = self.writer.sync().await;
@@ -161,7 +163,7 @@ enum IoOp {
     WriteBlob {
         header: BlobHeader,
         buffer: WriteBuffer,
-        tx: oneshot::Sender<io::Result<()>>,
+        tx: oneshot::Sender<io::Result<WriteId>>,
     },
     Sync {
         tx: oneshot::Sender<io::Result<u64>>,

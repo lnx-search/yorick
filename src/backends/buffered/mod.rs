@@ -5,11 +5,11 @@ use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 
-pub(crate) use reader::Reader;
 use tokio::io;
 use tokio::sync::oneshot;
-pub(crate) use writer::Writer;
 
+pub(crate) use self::reader::Reader;
+pub(crate) use self::writer::Writer;
 use crate::FileKey;
 
 #[derive(Debug, Copy, Clone)]
@@ -61,8 +61,8 @@ impl BufferedIoBackend {
         &self,
         file_key: FileKey,
         path: &Path,
-    ) -> io::Result<writer::Writer> {
-        writer::Writer::open_or_create(file_key, &path).await
+    ) -> io::Result<Writer> {
+        Writer::create(file_key, path).await
     }
 
     #[instrument("open-reader", skip(self))]
@@ -71,13 +71,13 @@ impl BufferedIoBackend {
         &self,
         file_key: FileKey,
         path: &Path,
-    ) -> io::Result<reader::Reader> {
+    ) -> io::Result<Reader> {
         let (tx, rx) = oneshot::channel();
 
         let path = path.to_path_buf();
         let pool = self.pool.clone();
         self.pool.spawn(move || {
-            let reader = reader::Reader::open(file_key, &path, pool);
+            let reader = Reader::open(file_key, &path, pool);
             let _ = tx.send(reader);
         });
 

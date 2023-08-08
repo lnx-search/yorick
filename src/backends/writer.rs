@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::backends::buffered;
 #[cfg(feature = "direct-io-backend")]
 use crate::backends::{directio, WriteBuffer};
-use crate::BlobHeader;
+use crate::{BlobHeader, WriteId};
 
 #[derive(Clone)]
 pub struct FileWriter {
@@ -16,7 +16,11 @@ pub struct FileWriter {
 
 impl FileWriter {
     /// Writes a given blob to the currently open file.
-    pub async fn write_blob<B>(&self, header: BlobHeader, buffer: B) -> io::Result<()>
+    pub async fn write_blob<B>(
+        &self,
+        header: BlobHeader,
+        buffer: B,
+    ) -> io::Result<WriteId>
     where
         B: AsRef<[u8]> + Send + 'static,
     {
