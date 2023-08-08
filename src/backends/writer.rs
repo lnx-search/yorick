@@ -9,6 +9,10 @@ use crate::backends::{directio, WriteBuffer};
 use crate::{BlobHeader, WriteId};
 
 #[derive(Clone)]
+/// A cheap to clone writer for a file.
+///
+/// This writer only allows sequential writing, and although it is cheap to clone,
+/// operations are not concurrent unlike reads, they are instead queued.
 pub struct FileWriter {
     closed: Arc<AtomicBool>,
     inner: FileWriterInner,
