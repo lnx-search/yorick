@@ -8,7 +8,7 @@ in order to group blocks which are a part of the same 'group' together.
 
 ### Features
 
-- Multiple IO backends to select (Mmap, BufferedIO, DirectIO)
+- Multiple IO backends to select (BufferedIO, DirectIO)
 - Non-blocking async interface.
 - Automatic relocating of data on disk to aid with IO caching.
 
