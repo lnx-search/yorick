@@ -1,0 +1,55 @@
+name: Rust
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macOS-latest, windows-latest]
+        rust: [stable]
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-hack
+        run: cargo install cargo-hack
+      - uses: arduino/setup-protoc@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-hack
+        run: cargo install cargo-hack
+      - uses: Swatinem/rust-cache@v1
+      - name: Check features
+        run: cargo hack check --all --ignore-private --each-feature --no-dev-deps
+      - name: Check all targets
+        run: cargo check --all --all-targets --all-features
+
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macOS-latest, windows-latest]
+        rust: [stable]
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: taiki-e/install-action@nextest
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run main tests
+        run: cargo nextest run --features test-utils --workspace --exclude simulation-tests --retries 3
+
+      - name: Run doc tests
+        run: cargo test --doc --features test-utils --workspace --exclude simulation-tests
