@@ -234,7 +234,7 @@ pub struct BlobInfo {
     /// The unique file ID of where the blob is stored.
     pub(crate) file_key: FileKey,
     /// The start position in the file of the blob.
-    pub(crate) pos: u64,
+    pub(crate) start_pos: u64,
     /// The length of the blob.
     pub(crate) len: u32,
     /// The ID of the group the blob belongs to.
@@ -250,8 +250,8 @@ impl BlobInfo {
 
     #[inline]
     /// The start position in the file of the blob.
-    pub fn pos(&self) -> u64 {
-        self.pos
+    pub fn start_pos(&self) -> u64 {
+        self.start_pos
     }
 
     #[inline]
@@ -268,7 +268,7 @@ impl BlobInfo {
 
     /// Checks if the blob was written before the given write ID.
     pub fn is_before(&self, write_id: WriteId) -> bool {
-        WriteId::new(self.file_key, self.pos) < write_id
+        WriteId::new(self.file_key, self.start_pos) < write_id
     }
 }
 
@@ -397,7 +397,7 @@ mod tests {
             1,
             BlobInfo {
                 file_key: FileKey(1),
-                pos: 0,
+                start_pos: 0,
                 len: 3,
                 group_id: 0,
             },
@@ -406,7 +406,7 @@ mod tests {
             2,
             BlobInfo {
                 file_key: FileKey(1),
-                pos: 0,
+                start_pos: 0,
                 len: 3,
                 group_id: 0,
             },
@@ -415,7 +415,7 @@ mod tests {
             3,
             BlobInfo {
                 file_key: FileKey(1),
-                pos: 0,
+                start_pos: 0,
                 len: 3,
                 group_id: 0,
             },
@@ -441,7 +441,7 @@ mod tests {
             1,
             BlobInfo {
                 file_key: FileKey(1),
-                pos: 0,
+                start_pos: 0,
                 len: 3,
                 group_id: 0,
             },
@@ -450,7 +450,7 @@ mod tests {
             2,
             BlobInfo {
                 file_key: FileKey(1),
-                pos: 0,
+                start_pos: 0,
                 len: 3,
                 group_id: 0,
             },
@@ -459,7 +459,7 @@ mod tests {
             5,
             BlobInfo {
                 file_key: FileKey(1),
-                pos: 0,
+                start_pos: 0,
                 len: 3,
                 group_id: 0,
             },

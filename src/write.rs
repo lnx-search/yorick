@@ -9,6 +9,7 @@ use parking_lot::RwLock;
 use smallvec::SmallVec;
 use tokio::time::interval;
 
+use crate::read::ReaderCache;
 use crate::{
     BlobHeader,
     BlobId,
@@ -22,19 +23,23 @@ use crate::{
 
 /// An active write context that allows you to write blobs of data to the service.
 pub struct WriteContext<'a> {
-    did_commit: bool,
     did_op: bool,
     blob_index: &'a BlobIndex,
+    readers_cache: &'a ReaderCache,
     writer_context: FileWriter,
     queued_changes: SmallVec<[(BlobId, BlobInfo); 1]>,
 }
 
 impl<'a> WriteContext<'a> {
-    pub(crate) fn new(index: &'a BlobIndex, writer: FileWriter) -> Self {
+    pub(crate) fn new(
+        index: &'a BlobIndex,
+        readers: &'a ReaderCache,
+        writer: FileWriter,
+    ) -> Self {
         Self {
-            did_commit: false,
             did_op: false,
             blob_index: index,
+            readers_cache: readers,
             writer_context: writer,
             queued_changes: SmallVec::new(),
         }
@@ -71,7 +76,7 @@ impl<'a> WriteContext<'a> {
 
         let info = BlobInfo {
             file_key: write_id.file_key,
-            pos: write_id.pos,
+            start_pos: write_id.end_pos - len as u64,
             len,
             group_id,
         };
@@ -86,9 +91,13 @@ impl<'a> WriteContext<'a> {
     pub async fn commit(mut self) -> io::Result<()> {
         if self.did_op {
             self.writer_context.sync().await?;
-            self.did_commit = true;
+
+            let file_key = self.writer_context.file_key();
+            // Reflect the changes to readers.
+            self.readers_cache.forget(file_key);
 
             self.blob_index.insert_many(self.queued_changes);
+            self.did_op = false;
         }
         Ok(())
     }

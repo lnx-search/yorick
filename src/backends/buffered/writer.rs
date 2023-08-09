@@ -93,6 +93,7 @@ impl WriterInner {
     }
 
     async fn sync(&mut self) -> io::Result<()> {
+        self.writer.flush().await?;
         self.writer.get_mut().sync_data().await
     }
 }

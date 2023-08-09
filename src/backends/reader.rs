@@ -48,6 +48,12 @@ impl FileReader {
         res
     }
 
+    #[inline]
+    /// Returns if the reader needs to be manually re-created in order to reflect new data.
+    pub fn needs_manual_reload(&self) -> bool {
+        matches!(self.inner, FileReaderInner::Buffered(_))
+    }
+
     fn check_file_not_closed(&self) -> io::Result<()> {
         if self.closed.load(Ordering::Relaxed) {
             Err(io::Error::new(ErrorKind::Other, "The file is closed"))

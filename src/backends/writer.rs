@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::backends::buffered;
 #[cfg(feature = "direct-io-backend")]
 use crate::backends::{directio, WriteBuffer};
-use crate::{BlobHeader, WriteId};
+use crate::{BlobHeader, FileKey, WriteId};
 
 #[derive(Clone)]
 /// A cheap to clone writer for a file.
@@ -14,6 +14,8 @@ use crate::{BlobHeader, WriteId};
 /// This writer only allows sequential writing, and although it is cheap to clone,
 /// operations are not concurrent unlike reads, they are instead queued.
 pub struct FileWriter {
+    /// The file key of the writer.
+    file_key: FileKey,
     /// Indicates if the file is closed or not.
     closed: Arc<AtomicBool>,
     /// The inner file writer.
@@ -29,6 +31,12 @@ impl FileWriter {
     /// Returns the number of bytes written to the writer.
     pub fn size(&self) -> u64 {
         self.num_bytes.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    /// Returns the file key of the writer.
+    pub fn file_key(&self) -> FileKey {
+        self.file_key
     }
 
     fn inc_size(&self, n: usize) {
@@ -107,9 +115,10 @@ impl FileWriter {
     }
 }
 
-impl From<buffered::Writer> for FileWriter {
-    fn from(writer: buffered::Writer) -> Self {
+impl FileWriter {
+    pub(crate) fn from_buffered(file_key: FileKey, writer: buffered::Writer) -> Self {
         Self {
+            file_key,
             inner: FileWriterInner::Buffered(writer),
             closed: Arc::new(AtomicBool::new(false)),
             num_bytes: Arc::new(AtomicU64::new(0)),
@@ -118,9 +127,13 @@ impl From<buffered::Writer> for FileWriter {
 }
 
 #[cfg(feature = "direct-io-backend")]
-impl From<directio::WriterMailbox> for FileWriter {
-    fn from(writer: directio::WriterMailbox) -> Self {
+impl FileWriter {
+    pub(crate) fn from_direct(
+        file_key: FileKey,
+        writer: directio::WriterMailbox,
+    ) -> Self {
         Self {
+            file_key,
             inner: FileWriterInner::DirectIo(writer),
             closed: Arc::new(AtomicBool::new(false)),
             num_bytes: Arc::new(AtomicU64::new(0)),

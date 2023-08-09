@@ -16,6 +16,7 @@ use crate::FileKey;
 /// and hopes the operating system handles caching well enough.
 pub struct Reader {
     file_key: FileKey,
+    len: usize,
     map: Arc<Mmap>,
     pool: Arc<rayon::ThreadPool>,
 }
@@ -29,6 +30,7 @@ impl Reader {
         pool: Arc<rayon::ThreadPool>,
     ) -> io::Result<Self> {
         let file = std::fs::File::open(path)?;
+        let len = file.metadata()?.len() as usize;
         let map = unsafe { Mmap::map(&file)? };
 
         #[cfg(unix)]
@@ -39,6 +41,7 @@ impl Reader {
 
         Ok(Self {
             file_key,
+            len,
             map: Arc::new(map),
             pool,
         })
@@ -49,9 +52,10 @@ impl Reader {
     pub async fn read_at(&self, pos: usize, len: usize) -> io::Result<ReadBuffer> {
         let (tx, rx) = oneshot::channel();
 
+        let file_length = self.len;
         let map = self.map.clone();
         self.pool.spawn(move || {
-            if pos >= map.len() {
+            if pos >= file_length {
                 let err = Err(io::Error::new(
                     ErrorKind::Other,
                     "Position in file outside of length of file.",

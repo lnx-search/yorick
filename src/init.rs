@@ -116,7 +116,7 @@ fn scan_file(
 
         let info = BlobInfo {
             file_key,
-            pos: start_from,
+            start_pos: start_from,
             len: (start_from + header.buffer_length() as u64) as u32,
             group_id: header.group_id,
         };
@@ -177,7 +177,7 @@ fn get_max_file_position_from_current_index(
 
         for (_, info) in guard.iter() {
             let info = info.get_one().unwrap();
-            let end = info.pos() + info.len() as u64;
+            let end = info.start_pos() + info.len() as u64;
 
             max_file_positions
                 .entry(info.current_file_key())

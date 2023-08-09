@@ -30,7 +30,7 @@ impl<'a> ReadContext<'a> {
 
         let reader = self.readers.get_or_create(info.file_key).await?;
         reader
-            .read_at(info.pos as usize, info.len as usize)
+            .read_at(info.start_pos() as usize, info.len() as usize)
             .await
             .map(Some)
     }
@@ -51,6 +51,27 @@ impl ReaderCache {
         }
     }
 
+    #[instrument("reader-cache", skip(self))]
+    /// Tells the cache to forget about a specific reader.
+    pub(crate) fn forget(&self, file_key: FileKey) {
+        let guard = self.live_readers.load();
+        let remove = if let Some(reader) = guard.get(&file_key) {
+            reader.needs_manual_reload()
+        } else {
+            false
+        };
+
+        if remove {
+            debug!(file_key = ?file_key, "Forgetting reader");
+            self.live_readers.rcu(|readers| {
+                let mut readers = HashMap::clone(readers);
+                readers.remove(&file_key);
+                readers
+            });
+        }
+    }
+
+    #[instrument("reader-cache", skip(self))]
     /// Attempts to get an existing, open reader or creates a new reader.
     async fn get_or_create(&self, file_key: FileKey) -> io::Result<FileReader> {
         let guard = self.live_readers.load();
@@ -61,6 +82,8 @@ impl ReaderCache {
 
         let path = get_data_file(&self.base_path, file_key);
         let reader = self.backend.open_reader(file_key, &path).await?;
+
+        debug!("Created new reader");
 
         self.live_readers.rcu(|readers| {
             let mut readers = HashMap::clone(readers);

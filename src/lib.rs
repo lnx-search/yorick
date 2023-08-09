@@ -120,7 +120,7 @@ impl YorickStorageService {
 
     /// Creates a new write context for writing blobs of data.
     pub fn create_write_ctx(&self) -> WriteContext {
-        WriteContext::new(&self.blob_index, self.writer_context.get())
+        WriteContext::new(&self.blob_index, &self.readers, self.writer_context.get())
     }
 
     /// Creates a read context for reading blobs.
@@ -162,12 +162,15 @@ pub struct WriteId {
     /// If our key is bigger than another, we know our ID is more recent.
     file_key: FileKey,
     /// The position of the cursor at the point of creating the ID.
-    pos: u64,
+    end_pos: u64,
 }
 
 impl WriteId {
     pub(crate) fn new(file_key: FileKey, pos: u64) -> Self {
-        Self { file_key, pos }
+        Self {
+            file_key,
+            end_pos: pos,
+        }
     }
 }
 

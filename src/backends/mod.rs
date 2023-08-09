@@ -2,7 +2,7 @@ use std::io;
 use std::ops::Deref;
 use std::path::Path;
 
-use crate::FileKey;
+use crate::{BlobHeader, FileKey};
 
 mod buffered;
 #[cfg(feature = "direct-io-backend")]
@@ -60,12 +60,12 @@ impl StorageBackend {
             StorageBackendInner::BufferedIo(backend) => backend
                 .open_writer(file_key, path)
                 .await
-                .map(writer::FileWriter::from),
+                .map(|writer| FileWriter::from_buffered(file_key, writer)),
             #[cfg(feature = "direct-io-backend")]
             StorageBackendInner::DirectIo(backend) => backend
                 .open_writer(file_key, path)
                 .await
-                .map(writer::FileWriter::from),
+                .map(|writer| FileWriter::from_direct(file_key, writer)),
         }
     }
 
@@ -87,15 +87,6 @@ impl StorageBackend {
                 .map(reader::FileReader::from),
         }
     }
-
-    /// Shuts down the storage backend
-    pub async fn shutdown(&self) -> io::Result<()> {
-        match &self.inner {
-            #[cfg(feature = "direct-io-backend")]
-            StorageBackendInner::DirectIo(backend) => backend.shutdown().await,
-            _ => Ok(()),
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -112,27 +103,30 @@ enum StorageBackendInner {
 
 #[derive(Debug, Clone)]
 /// A owned read result of the blob.
-pub struct ReadBuffer(ReadBufferInner);
+pub struct ReadBuffer {
+    inner: ReadBufferInner,
+}
 
 impl Deref for ReadBuffer {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner[BlobHeader::SIZE..]
     }
 }
 
 impl AsRef<[u8]> for ReadBuffer {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
+        let buf: &[u8] = self.inner.as_ref();
+        &buf[BlobHeader::SIZE..]
     }
 }
 
 impl ReadBuffer {
     /// Creates a new read buffer from a given slice.
-    pub fn copy_from(buffer: &[u8]) -> Self {
+    pub(crate) fn copy_from(buffer: &[u8]) -> Self {
         let mut buf = ReadBufferInner::with_capacity(buffer.len());
         buf.extend_from_slice(buffer);
-        Self(buf)
+        Self { inner: buf }
     }
 }
