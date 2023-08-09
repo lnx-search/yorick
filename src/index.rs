@@ -49,14 +49,6 @@ impl Default for BlobIndex {
 
 impl BlobIndex {
     /// Inserts a single blob ID into the index with some info.
-    pub(crate) fn insert(&self, blob_id: BlobId, info: BlobInfo) {
-        let mut lock = self.writer.lock();
-        lock.update(blob_id, info);
-        lock.publish();
-        self.has_changed.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Inserts a single blob ID into the index with some info.
     pub(crate) fn insert_many(
         &self,
         iter: impl IntoIterator<Item = (BlobId, BlobInfo)>,
@@ -65,14 +57,6 @@ impl BlobIndex {
         for (blob_id, info) in iter {
             lock.update(blob_id, info);
         }
-        lock.publish();
-        self.has_changed.fetch_add(1, Ordering::Relaxed);
-    }
-
-    /// Removes a single blob from the index.
-    pub(crate) fn remove(&self, blob_id: BlobId) {
-        let mut lock = self.writer.lock();
-        lock.remove_entry(blob_id);
         lock.publish();
         self.has_changed.fetch_add(1, Ordering::Relaxed);
     }
@@ -261,6 +245,12 @@ impl BlobInfo {
     }
 
     #[inline]
+    /// Returns if the blob is empty
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[inline]
     /// The ID of the group this blob belongs to.
     pub fn group_id(&self) -> u64 {
         self.group_id
@@ -310,7 +300,7 @@ impl IndexBackgroundSnapshotter {
         };
 
         std::thread::Builder::new()
-            .name(format!("yorick-snapshot-thread"))
+            .name("yorick-snapshot-thread".to_string())
             .spawn(move || actor.run())
             .expect("Spawn background thread");
 
