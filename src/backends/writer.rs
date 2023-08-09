@@ -1,6 +1,6 @@
 use std::io;
 use std::io::ErrorKind;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::backends::buffered;
@@ -14,11 +14,27 @@ use crate::{BlobHeader, WriteId};
 /// This writer only allows sequential writing, and although it is cheap to clone,
 /// operations are not concurrent unlike reads, they are instead queued.
 pub struct FileWriter {
+    /// Indicates if the file is closed or not.
     closed: Arc<AtomicBool>,
+    /// The inner file writer.
     inner: FileWriterInner,
+    /// The number of bytes currently written to the writer.
+    ///
+    /// Some bytes may still be in-flight.
+    num_bytes: Arc<AtomicU64>,
 }
 
 impl FileWriter {
+    #[inline]
+    /// Returns the number of bytes written to the writer.
+    pub fn size(&self) -> u64 {
+        self.num_bytes.load(Ordering::Relaxed)
+    }
+
+    fn inc_size(&self, n: usize) {
+        self.num_bytes.fetch_add(n as u64, Ordering::Relaxed);
+    }
+
     /// Writes a given blob to the currently open file.
     pub async fn write_blob<B>(
         &self,
@@ -30,16 +46,23 @@ impl FileWriter {
     {
         self.check_file_not_closed()?;
 
-        match &self.inner {
-            FileWriterInner::Buffered(writer) => {
-                writer.write_blob(header, buffer.as_ref()).await
-            },
+        let buf = buffer.as_ref();
+        let num_bytes = buf.len();
+
+        let res = match &self.inner {
+            FileWriterInner::Buffered(writer) => writer.write_blob(header, buf).await,
             #[cfg(feature = "direct-io-backend")]
             FileWriterInner::DirectIo(writer) => {
                 let buffer = directio::WriteBuffer::new(buffer);
                 writer.write_blob(header, buffer).await
             },
+        };
+
+        if res.is_ok() {
+            self.inc_size(num_bytes);
         }
+
+        res
     }
 
     /// Flushes any in-memory data to disk ensuring it is safely persisted.
@@ -89,6 +112,7 @@ impl From<buffered::Writer> for FileWriter {
         Self {
             inner: FileWriterInner::Buffered(writer),
             closed: Arc::new(AtomicBool::new(false)),
+            num_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 }
@@ -99,6 +123,7 @@ impl From<directio::WriterMailbox> for FileWriter {
         Self {
             inner: FileWriterInner::DirectIo(writer),
             closed: Arc::new(AtomicBool::new(false)),
+            num_bytes: Arc::new(AtomicU64::new(0)),
         }
     }
 }

@@ -1,5 +1,4 @@
 use std::io;
-use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -22,19 +21,16 @@ impl Writer {
     #[instrument("open-or-create-writer")]
     /// Opens or creates a given file located at the file path.
     pub(crate) async fn create(file_key: FileKey, path: &Path) -> io::Result<Self> {
-        if path.exists() {
-            return Err(io::Error::new(
-                ErrorKind::AlreadyExists,
-                format!("File {} already exists", path.display()),
-            ));
-        }
-
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
             .open(path)
             .await?;
+
+        if let Some(parent) = path.parent() {
+            crate::backends::utils::sync_directory(parent).await?;
+        }
 
         let inner = WriterInner {
             file_key,
@@ -87,7 +83,7 @@ impl WriterInner {
         buffer: &[u8],
     ) -> io::Result<WriteId> {
         let header = header.as_bytes();
-        self.writer.write_all(header).await?;
+        self.writer.write_all(&header).await?;
         self.cursor += header.len();
 
         self.writer.write_all(buffer).await?;

@@ -8,6 +8,7 @@ mod buffered;
 #[cfg(feature = "direct-io-backend")]
 mod directio;
 mod reader;
+mod utils;
 mod writer;
 
 pub use self::buffered::BufferedIoConfig;
@@ -23,6 +24,7 @@ type ReadBufferInner = Vec<u8>;
 /// The inner buffer used by reads with a 16 byte alignment.
 type ReadBufferInner = rkyv::AlignedVec;
 
+#[derive(Clone)]
 /// The core storage backend used for completing IO operations on disk.
 pub struct StorageBackend {
     inner: StorageBackendInner,
@@ -30,9 +32,7 @@ pub struct StorageBackend {
 
 impl StorageBackend {
     /// Creates a new buffered IO backend with a given config.
-    pub async fn create_blocking_io(
-        config: buffered::BufferedIoConfig,
-    ) -> io::Result<Self> {
+    pub async fn create_blocking_io(config: BufferedIoConfig) -> io::Result<Self> {
         let backend = buffered::BufferedIoBackend::create(config)?;
         Ok(Self {
             inner: StorageBackendInner::BufferedIo(backend),
@@ -41,7 +41,7 @@ impl StorageBackend {
 
     #[cfg(feature = "direct-io-backend")]
     /// Creates a new direct IO backend with a given config.
-    pub async fn create_direct_io(config: directio::DirectIoConfig) -> io::Result<Self> {
+    pub async fn create_direct_io(config: DirectIoConfig) -> io::Result<Self> {
         let backend = directio::DirectIoBackend::create(config).await?;
         Ok(Self {
             inner: StorageBackendInner::DirectIo(backend),
@@ -89,6 +89,7 @@ impl StorageBackend {
     }
 }
 
+#[derive(Clone)]
 /// The inner storage backend.
 ///
 /// This is just an enum that is set based on the runtime configuration.

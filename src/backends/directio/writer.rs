@@ -96,6 +96,10 @@ impl WriterActor {
             .dma_open(path)
             .await?;
 
+        if let Some(parent) = path.parent() {
+            crate::backends::utils::sync_directory(parent).await?;
+        }
+
         let writer = DmaStreamWriterBuilder::new(file)
             .with_write_behind(10)
             .with_buffer_size(512 << 10)
