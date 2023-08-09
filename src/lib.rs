@@ -11,13 +11,15 @@ use rkyv::{Archive, Deserialize, Serialize};
 use tokio::io;
 
 use crate::index::IndexBackgroundSnapshotter;
-use crate::write::{WriterContext, WriterSizeController};
+use crate::read::{ReadContext, ReaderCache};
+use crate::write::{WriteContext, WriterContext, WriterSizeController};
 
 mod backends;
 mod cleanup;
 mod index;
 mod init;
 mod merge;
+mod read;
 mod write;
 
 #[cfg(feature = "direct-io-backend")]
@@ -45,8 +47,6 @@ pub struct StorageServiceConfig {
 
 /// The primary storage service that controls reading and writing data.
 pub struct YorickStorageService {
-    /// The inner storage backend managing IO.
-    backend: StorageBackend,
     /// The writer context.
     writer_context: WriterContext,
     /// The actor which controls automatic file rollover's kill switch.
@@ -55,6 +55,8 @@ pub struct YorickStorageService {
     index_snapshot_stop_signal: Arc<AtomicBool>,
     /// The live blob lookup table/index.
     blob_index: BlobIndex,
+    /// The live reader cache.
+    readers: ReaderCache,
 }
 
 impl YorickStorageService {
@@ -66,6 +68,9 @@ impl YorickStorageService {
     ) -> io::Result<Self> {
         let data_directory = get_data_path(&config.base_path);
         let indexes_directory = get_index_path(&config.base_path);
+
+        tokio::fs::create_dir_all(&data_directory).await?;
+        tokio::fs::create_dir_all(&indexes_directory).await?;
 
         cleanup::cleanup_empty_files(&data_directory).await?;
         let next_file_key = init::load_next_file_key(&data_directory).await?;
@@ -82,7 +87,7 @@ impl YorickStorageService {
         let size_controller_stop_signal = WriterSizeController::spawn(
             config.max_file_size,
             next_file_key.0 + 1,
-            data_directory,
+            data_directory.clone(),
             backend.clone(),
             writer_context.clone(),
         )
@@ -94,12 +99,14 @@ impl YorickStorageService {
             blob_index.clone(),
         );
 
+        let readers = ReaderCache::new(backend, data_directory);
+
         Ok(Self {
-            backend,
             writer_context,
             size_controller_stop_signal,
             index_snapshot_stop_signal,
             blob_index,
+            readers,
         })
     }
 
@@ -109,6 +116,16 @@ impl YorickStorageService {
             .store(true, Ordering::Relaxed);
         self.size_controller_stop_signal
             .store(true, Ordering::Relaxed);
+    }
+
+    /// Creates a new write context for writing blobs of data.
+    pub fn create_write_ctx(&self) -> WriteContext {
+        WriteContext::new(&self.blob_index, self.writer_context.get())
+    }
+
+    /// Creates a read context for reading blobs.
+    pub fn create_read_ctx(&self) -> ReadContext {
+        ReadContext::new(&self.blob_index, &self.readers)
     }
 }
 

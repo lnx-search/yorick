@@ -1,16 +1,98 @@
-use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{io, mem};
 
 use exponential_backoff::Backoff;
 use parking_lot::RwLock;
+use smallvec::SmallVec;
 use tokio::time::interval;
 
-use crate::{FileKey, FileWriter, StorageBackend};
+use crate::{
+    BlobHeader,
+    BlobId,
+    BlobIndex,
+    BlobInfo,
+    FileKey,
+    FileWriter,
+    StorageBackend,
+    WriteId,
+};
 
-pub struct WriteContext {}
+/// An active write context that allows you to write blobs of data to the service.
+pub struct WriteContext<'a> {
+    did_commit: bool,
+    did_op: bool,
+    blob_index: &'a BlobIndex,
+    writer_context: FileWriter,
+    queued_changes: SmallVec<[(BlobId, BlobInfo); 1]>,
+}
+
+impl<'a> WriteContext<'a> {
+    pub(crate) fn new(index: &'a BlobIndex, writer: FileWriter) -> Self {
+        Self {
+            did_commit: false,
+            did_op: false,
+            blob_index: index,
+            writer_context: writer,
+            queued_changes: SmallVec::new(),
+        }
+    }
+
+    /// Writes a blob to the storage service.
+    ///
+    /// Each blob can be tagged with an ID and group ID.
+    pub async fn write_blob<B>(
+        &mut self,
+        id: BlobId,
+        group_id: u64,
+        buffer: B,
+    ) -> io::Result<WriteId>
+    where
+        B: AsRef<[u8]> + Send + 'static,
+    {
+        let buf = buffer.as_ref();
+        assert!(
+            buf.len() < u32::MAX as usize,
+            "Buffer cannot be bigger than u32::MAX bytes"
+        );
+
+        let checksum = crc32fast::hash(buf);
+        let header = BlobHeader {
+            blob_id: id,
+            blob_length: buf.len() as u32,
+            group_id,
+            checksum,
+        };
+
+        let len = header.buffer_length() as u32;
+        let write_id = self.writer_context.write_blob(header, buffer).await?;
+
+        let info = BlobInfo {
+            file_key: write_id.file_key,
+            pos: write_id.pos,
+            len,
+            group_id,
+        };
+        self.queued_changes.push((id, info));
+
+        self.did_op = true;
+
+        Ok(write_id)
+    }
+
+    /// Commits the submitted blob information.
+    pub async fn commit(mut self) -> io::Result<()> {
+        if self.did_op {
+            self.writer_context.sync().await?;
+            self.did_commit = true;
+
+            self.blob_index.insert_many(self.queued_changes);
+        }
+        Ok(())
+    }
+}
 
 /// A background actor that watches the
 /// current active writer, and changes to a new writer
@@ -108,7 +190,10 @@ impl WriterSizeController {
             .open_writer(FileKey(new_file_key), &path)
             .await?;
 
-        self.writer_context.set_writer(writer);
+        let old_writer = self.writer_context.set_writer(writer);
+        if let Err(e) = old_writer.sync().await {
+            warn!(error = ?e, "Failed to sync old writer file due to error");
+        }
 
         Ok(new_file_key)
     }
@@ -131,7 +216,11 @@ impl WriterContext {
         self.active_writer.read().size()
     }
 
-    pub(crate) fn set_writer(&self, writer: FileWriter) {
-        (*self.active_writer.write()) = writer;
+    pub(crate) fn get(&self) -> FileWriter {
+        self.active_writer.read().clone()
+    }
+
+    pub(crate) fn set_writer(&self, writer: FileWriter) -> FileWriter {
+        mem::replace(&mut self.active_writer.write(), writer)
     }
 }

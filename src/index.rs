@@ -437,35 +437,33 @@ mod tests {
     #[test]
     fn test_index_snapshot() {
         let index = BlobIndex::default();
-        index.insert_many([
-            (
-                1,
-                BlobInfo {
-                    file_key: FileKey(1),
-                    pos: 0,
-                    len: 0,
-                    group_id: 0,
-                },
-            ),
-            (
-                2,
-                BlobInfo {
-                    file_key: FileKey(2),
-                    pos: 0,
-                    len: 0,
-                    group_id: 0,
-                },
-            ),
-            (
-                5,
-                BlobInfo {
-                    file_key: FileKey(3),
-                    pos: 0,
-                    len: 0,
-                    group_id: 0,
-                },
-            ),
-        ]);
+        index.insert(
+            1,
+            BlobInfo {
+                file_key: FileKey(1),
+                pos: 0,
+                len: 3,
+                group_id: 0,
+            },
+        );
+        index.insert(
+            2,
+            BlobInfo {
+                file_key: FileKey(1),
+                pos: 0,
+                len: 3,
+                group_id: 0,
+            },
+        );
+        index.insert(
+            5,
+            BlobInfo {
+                file_key: FileKey(1),
+                pos: 0,
+                len: 3,
+                group_id: 0,
+            },
+        );
 
         let snapshot = index.create_snapshot();
         let loaded =

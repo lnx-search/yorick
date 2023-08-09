@@ -9,6 +9,7 @@ description = "For digging blocks of data into the disk."
 [dependencies]
 async-trait = "0.1.68"
 ahash = "0.8.3"
+arc-swap = "1.6.0"
 tracing = "0.1.37"
 tracing-futures = "0.2.5"
 futures-lite = "1.13.0"
@@ -21,6 +22,7 @@ parking_lot = "0.12.1"
 crc32fast = "1.3.2"
 thiserror = "1"
 exponential-backoff = "1.2.0"
+smallvec = "1.10.0"
 
 rkyv = { version = "0.7.42", features = ["strict", "archive_le"] }
 tokio = { version = "1", default-features = false, features = ["sync", "fs", "io-util", "time", "rt"] }
@@ -30,6 +32,10 @@ lz4_flex = { version = "0.11", default-features = false, optional = true }
 
 # We vendor our own version of evmap here to expose some nasty unsafe traits.
 evmap = { path = "../evmap" }
+
+[dev-dependencies]
+uuid = { version = "1.3.3", features = ["v4"] }
+tokio = { version = "1", default-features = false, features = ["full"] }
 
 [features]
 default = ["rkyv_size_32", "compress-index"]

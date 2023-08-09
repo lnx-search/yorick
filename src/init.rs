@@ -170,7 +170,10 @@ fn get_max_file_position_from_current_index(
 ) -> HashMap<FileKey, u64> {
     let mut max_file_positions = HashMap::with_capacity(size_hint);
     {
-        let guard = index.reader().enter().expect("Guard should not be None");
+        let guard = match index.reader().enter() {
+            None => return HashMap::new(),
+            Some(guard) => guard,
+        };
 
         for (_, info) in guard.iter() {
             let info = info.get_one().unwrap();

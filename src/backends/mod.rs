@@ -87,6 +87,15 @@ impl StorageBackend {
                 .map(reader::FileReader::from),
         }
     }
+
+    /// Shuts down the storage backend
+    pub async fn shutdown(&self) -> io::Result<()> {
+        match &self.inner {
+            #[cfg(feature = "direct-io-backend")]
+            StorageBackendInner::DirectIo(backend) => backend.shutdown().await,
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone)]
