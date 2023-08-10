@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufReader, ErrorKind, Read};
+use std::io::{BufReader, ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::{cmp, io};
 
@@ -9,6 +9,7 @@ use ahash::{HashMap, HashMapExt};
 use crate::{
     get_data_file,
     BlobHeader,
+    BlobId,
     BlobIndex,
     BlobInfo,
     FileKey,
@@ -87,81 +88,107 @@ fn load_blob_index_inner(index_path: &Path, data_path: &Path) -> io::Result<Blob
 
     for (file_key, start_from) in files_to_scan {
         let path = get_data_file(data_path, file_key);
-        scan_file(file_key, &path, start_from, &base_index)?;
+
+        let mut lock = base_index.writer().lock();
+        scan_file(file_key, &path, start_from, |blob_id, info| {
+            lock.update(blob_id, info);
+        })?;
+        lock.publish();
     }
 
     Ok(base_index)
 }
 
-fn scan_file(
+fn scan_file<CB>(
     file_key: FileKey,
     path: &Path,
-    mut start_from: u64,
-    index: &BlobIndex,
-) -> io::Result<()> {
+    mut cursor: u64,
+    mut header_callback: CB,
+) -> io::Result<()>
+where
+    CB: FnMut(BlobId, BlobInfo),
+{
     let file_len = path.metadata()?.len();
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
+    let mut file = File::open(path)?;
 
-    let mut lock = index.writer().lock();
-    while start_from < file_len {
-        let header = match read_next(&mut reader) {
-            Err(e) => {
-                warn!(error = ?e, "File is partially corrupted, saving progress");
-                lock.publish();
+    if cursor > 0 {
+        file.seek(SeekFrom::Start(cursor))?;
+    }
+
+    let mut reader = BufReader::with_capacity(10 << 20, file);
+
+    while cursor < file_len {
+        let initial_cursor = cursor;
+        let maybe_header = read_next(&mut reader, &mut cursor, file_len)?;
+
+        let (bytes_skipped, header) = match maybe_header {
+            None => {
+                warn!(
+                    invalid_bytes_start = initial_cursor,
+                    "Reached EOF while finding next header"
+                );
                 return Ok(());
             },
-            Ok(header) => header,
+            Some(data) => data,
         };
+
+        if bytes_skipped > 0 {
+            warn!(
+                bytes_skipped = bytes_skipped,
+                start_pos = cursor,
+                "Some data was skipped as it is corrupted"
+            );
+        }
 
         let info = BlobInfo {
             file_key,
-            start_pos: start_from,
-            len: (start_from + header.buffer_length() as u64) as u32,
+            start_pos: cursor,
+            len: header.total_length() as u32,
             group_id: header.group_id,
         };
 
-        lock.update(header.blob_id, info);
+        (header_callback)(header.blob_id, info);
 
-        // Advance the cursor.
-        start_from += header.buffer_length() as u64;
+        cursor += header.blob_length() as u64;
+        reader.seek_relative(header.blob_length() as i64)?;
     }
-
-    lock.publish();
 
     Ok(())
 }
 
-fn read_next(file: &mut BufReader<File>) -> io::Result<BlobHeader> {
-    let mut header = [0; BlobHeader::SIZE];
+/// Finds the next valid blob header.
+///
+/// If the file is partially corrupted, this can take a while as
+/// the recovery operation is certainly not fast nor optimised.
+fn read_next(
+    file: &mut BufReader<File>,
+    cursor: &mut u64,
+    file_size: u64,
+) -> io::Result<Option<(u64, BlobHeader)>> {
+    let mut offset = 0;
+    let mut temp_buffer = [0; BlobHeader::SIZE];
+    let mut num_bytes_skipped = 0;
+    while *cursor < file_size {
+        match file.read_exact(&mut temp_buffer[offset..]) {
+            Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+            Ok(()) => {},
+        }
 
-    file.read_exact(&mut header)?;
+        (*cursor) += (BlobHeader::SIZE - offset) as u64;
 
-    let header = BlobHeader::from_bytes(header);
+        if let Some(header) = BlobHeader::from_bytes(temp_buffer) {
+            return Ok(Some((num_bytes_skipped, header)));
+        }
 
-    let chunk_size = cmp::min(header.blob_length as usize, 32 << 10);
-    let mut buffer = vec![0u8; chunk_size];
-    let mut hasher = crc32fast::Hasher::new();
-    let mut remaining = header.blob_length as usize;
-    while remaining > 0 {
-        let pos = cmp::min(chunk_size, remaining);
-        file.read_exact(&mut buffer[..pos])?;
-        hasher.update(&buffer[..pos]);
-        remaining -= pos;
+        // If we can't read a valid header, move 1 byte across.
+        temp_buffer.copy_within(1.., 0);
+        offset = BlobHeader::SIZE - 1;
+
+        num_bytes_skipped += 1;
     }
 
-    let actual_checksum = hasher.finalize();
-    if actual_checksum != header.checksum {
-        return Err(io::Error::new(
-            ErrorKind::InvalidData,
-            format!(
-                "Checksum missmatch, expected {} != actual {actual_checksum}",
-                header.checksum
-            ),
-        ));
-    }
-
-    Ok(header)
+    Ok(None)
 }
 
 fn get_max_file_position_from_current_index(
@@ -287,4 +314,170 @@ fn parse_snapshot_file_name(path: &Path) -> Option<u64> {
         .strip_suffix(INDEX_FILE_EXT)?
         .strip_suffix('.')?;
     name_str.parse::<u64>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    static SAMPLE: &[u8] = b"Some, random, data";
+
+    #[test]
+    fn test_file_scan_simple() {
+        let tmp_file = test_utils::temp_dir().join("test_file_scan_simple.data");
+
+        let header = BlobHeader::new(1, 0, 1, crc32fast::hash(&[]));
+        std::fs::write(&tmp_file, &header.as_bytes()).unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, 0, |_, _| times_called += 1)
+            .expect("Scan should be ok");
+        assert_eq!(times_called, 1, "One header should be retrieved");
+
+        std::fs::remove_dir_all(tmp_file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn test_file_scan_offset() {
+        let tmp_file = test_utils::temp_dir().join("test_file_scan_offset.data");
+
+        let header = BlobHeader::new(1, 0, 1, crc32fast::hash(&[]));
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header.as_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, SAMPLE.len() as u64, |_, _| {
+            times_called += 1
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 1, "One header should be retrieved");
+
+        std::fs::remove_dir_all(tmp_file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn test_file_scan_many_simple() {
+        let tmp_file = test_utils::temp_dir().join("test_file_scan_simple.data");
+
+        let header1 = BlobHeader::new(1, 0, 1, crc32fast::hash(&[]));
+        let header2 = BlobHeader::new(2, 0, 1, crc32fast::hash(&[]));
+        let header3 = BlobHeader::new(3, 0, 1, crc32fast::hash(&[]));
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(&header1.as_bytes()).unwrap();
+        file.write_all(&header2.as_bytes()).unwrap();
+        file.write_all(&header3.as_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, 0, |blob_id, _| {
+            times_called += 1;
+            assert!(
+                [1, 2, 3].contains(&blob_id),
+                "Blob ID should be in valid list."
+            )
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 3, "Three headers should be retrieved");
+
+        std::fs::remove_dir_all(tmp_file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn test_file_scan_many_offset() {
+        let tmp_file = test_utils::temp_dir().join("test_file_scan_simple.data");
+
+        let header1 = BlobHeader::new(1, 0, 1, crc32fast::hash(&[]));
+        let header2 = BlobHeader::new(2, 0, 1, crc32fast::hash(&[]));
+        let header3 = BlobHeader::new(3, 0, 1, crc32fast::hash(&[]));
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header1.as_bytes()).unwrap();
+        file.write_all(&header2.as_bytes()).unwrap();
+        file.write_all(&header3.as_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, SAMPLE.len() as u64, |blob_id, _| {
+            times_called += 1;
+            assert!(
+                [1, 2, 3].contains(&blob_id),
+                "Blob ID should be in valid list."
+            )
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 3, "Three headers should be retrieved");
+
+        std::fs::remove_dir_all(tmp_file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn test_file_scan_corrupted_recover() {
+        let tmp_file = test_utils::temp_dir().join("test_file_scan_simple.data");
+
+        let header1 = BlobHeader::new(1, 0, 1, crc32fast::hash(&[]));
+        let header2 = BlobHeader::new(2, 0, 1, crc32fast::hash(&[]));
+        let header3 = BlobHeader::new(3, 0, 1, crc32fast::hash(&[]));
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header1.as_bytes()).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header2.as_bytes()).unwrap();
+        file.write_all(&header3.as_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, SAMPLE.len() as u64, |blob_id, _| {
+            times_called += 1;
+            assert!(
+                [1, 2, 3].contains(&blob_id),
+                "Blob ID should be in valid list."
+            )
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 3, "Three headers should be retrieved");
+
+        let header1 = BlobHeader::new(1, 0, 1, crc32fast::hash(&[]));
+        let header2 = BlobHeader::new(2, 0, 1, crc32fast::hash(&[]));
+        let header3 = BlobHeader::new(3, 0, 1, crc32fast::hash(&[]));
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header1.as_bytes()).unwrap();
+        file.write_all(&[1]).unwrap();
+        file.write_all(&header2.as_bytes()).unwrap();
+        file.write_all(&header3.as_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, SAMPLE.len() as u64, |blob_id, _| {
+            times_called += 1;
+            assert!(
+                [1, 2, 3].contains(&blob_id),
+                "Blob ID should be in valid list."
+            )
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 3, "Three headers should be retrieved");
+
+        let header1 = BlobHeader::new(1, 0, 1, crc32fast::hash(&[]));
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header1.as_bytes()).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, SAMPLE.len() as u64, |blob_id, _| {
+            times_called += 1;
+            assert_eq!(blob_id, 1);
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 1, "One header should be retrieved");
+
+        std::fs::remove_dir_all(tmp_file.parent().unwrap()).unwrap();
+    }
 }

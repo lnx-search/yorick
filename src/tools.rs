@@ -21,3 +21,10 @@ impl KillSwitch {
         self.shutdown_signal.store(true, Ordering::Relaxed);
     }
 }
+
+/// Gets the city-32 hash of some bytes.
+///
+/// This is mostly meant for small checksums.
+pub fn stable_hash(buf: &[u8]) -> u32 {
+    cityhasher::hash(buf)
+}

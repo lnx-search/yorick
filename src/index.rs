@@ -222,7 +222,7 @@ pub struct BlobInfo {
     pub(crate) file_key: FileKey,
     /// The start position in the file of the blob.
     pub(crate) start_pos: u64,
-    /// The length of the blob.
+    /// The length of the blob INCLUDING the header.
     pub(crate) len: u32,
     /// The ID of the group the blob belongs to.
     pub(crate) group_id: u64,

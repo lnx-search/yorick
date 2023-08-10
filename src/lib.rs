@@ -202,6 +202,8 @@ impl WriteId {
 #[derive(Debug, Copy, Clone)]
 /// A metadata header for each blob entry.
 pub struct BlobHeader {
+    /// A city hash checksum of the blob header.
+    blob_header_checksum: u32,
     /// The ID of the blob.
     pub blob_id: u64,
     /// The length of the blob in bytes.
@@ -214,34 +216,88 @@ pub struct BlobHeader {
 
 impl BlobHeader {
     /// The static size of the header on disk.
-    pub const SIZE: usize = mem::size_of::<u64>()
+    pub const SIZE: usize = 2
+        + mem::size_of::<u32>()
+        + mem::size_of::<u64>()
         + mem::size_of::<u32>()
         + mem::size_of::<u64>()
         + mem::size_of::<u32>();
 
+    /// The static size of the header on disk.
+    const SIZE_INFO_ONLY: usize = mem::size_of::<u64>()
+        + mem::size_of::<u32>()
+        + mem::size_of::<u64>()
+        + mem::size_of::<u32>();
+
+    /// The magic bytes which signals to the handlers that the data after it might be a header.
+    ///
+    /// This is only used for recovering if corrupted data is discovered.
+    const MAGIC_BYTES: [u8; 2] = [1, 1];
+
+    /// Creates a new blob header.
+    pub fn new(blob_id: u64, blob_length: u32, group_id: u64, checksum: u32) -> Self {
+        let mut buffer = [0; Self::SIZE_INFO_ONLY];
+
+        buffer[0..8].copy_from_slice(&blob_id.to_le_bytes());
+        buffer[8..12].copy_from_slice(&blob_length.to_le_bytes());
+        buffer[12..20].copy_from_slice(&group_id.to_le_bytes());
+        buffer[20..24].copy_from_slice(&checksum.to_le_bytes());
+
+        let blob_header_checksum = tools::stable_hash(&buffer);
+
+        Self {
+            blob_header_checksum,
+            blob_id,
+            blob_length,
+            group_id,
+            checksum,
+        }
+    }
+
     /// Returns the total length of the blob including the header.
-    pub fn buffer_length(&self) -> usize {
+    pub fn total_length(&self) -> usize {
         Self::SIZE + self.blob_length as usize
+    }
+
+    /// Returns the length of the blob excluding the header.
+    pub fn blob_length(&self) -> usize {
+        self.blob_length as usize
     }
 
     /// Returns the header as bytes.
     pub fn as_bytes(&self) -> [u8; Self::SIZE] {
         let mut buffer = [0; Self::SIZE];
-        buffer[0..8].copy_from_slice(&self.blob_id.to_le_bytes());
-        buffer[8..12].copy_from_slice(&self.blob_length.to_le_bytes());
-        buffer[12..20].copy_from_slice(&self.group_id.to_le_bytes());
-        buffer[20..24].copy_from_slice(&self.checksum.to_le_bytes());
+        buffer[0..2].copy_from_slice(&Self::MAGIC_BYTES);
+        buffer[2..6].copy_from_slice(&self.blob_header_checksum.to_le_bytes());
+        buffer[6..14].copy_from_slice(&self.blob_id.to_le_bytes());
+        buffer[14..18].copy_from_slice(&self.blob_length.to_le_bytes());
+        buffer[18..26].copy_from_slice(&self.group_id.to_le_bytes());
+        buffer[26..30].copy_from_slice(&self.checksum.to_le_bytes());
         buffer
     }
 
     /// Creates a new header from a given buffer.
-    pub fn from_bytes(buffer: [u8; Self::SIZE]) -> Self {
-        Self {
-            blob_id: u64::from_le_bytes(buffer[0..8].try_into().unwrap()),
-            blob_length: u32::from_le_bytes(buffer[8..12].try_into().unwrap()),
-            group_id: u64::from_le_bytes(buffer[12..20].try_into().unwrap()),
-            checksum: u32::from_le_bytes(buffer[20..24].try_into().unwrap()),
+    ///
+    /// If the buffer is an invalid header, `None` is returned.
+    pub fn from_bytes(buffer: [u8; Self::SIZE]) -> Option<Self> {
+        if buffer[0..2] != Self::MAGIC_BYTES {
+            return None;
         }
+
+        let expected_checksum = u32::from_le_bytes(buffer[2..6].try_into().unwrap());
+        let actual_checksum = tools::stable_hash(&buffer[6..]);
+
+        if expected_checksum != actual_checksum {
+            return None;
+        }
+
+        Some(Self {
+            blob_header_checksum: actual_checksum,
+            blob_id: u64::from_le_bytes(buffer[6..14].try_into().unwrap()),
+            blob_length: u32::from_le_bytes(buffer[14..18].try_into().unwrap()),
+            group_id: u64::from_le_bytes(buffer[18..26].try_into().unwrap()),
+            checksum: u32::from_le_bytes(buffer[26..30].try_into().unwrap()),
+        })
     }
 }
 

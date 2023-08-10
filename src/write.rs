@@ -26,7 +26,7 @@ pub struct WriteContext {
     did_op: bool,
     blob_index: BlobIndex,
     readers_cache: ReaderCache,
-    writer_context: FileWriter,
+    file_writer: FileWriter,
     queued_changes: SmallVec<[(BlobId, BlobInfo); 1]>,
 }
 
@@ -40,7 +40,7 @@ impl WriteContext {
             did_op: false,
             blob_index: index,
             readers_cache: readers,
-            writer_context: writer,
+            file_writer: writer,
             queued_changes: SmallVec::new(),
         }
     }
@@ -65,15 +65,9 @@ impl WriteContext {
         );
 
         let checksum = crc32fast::hash(buf);
-        let header = BlobHeader {
-            blob_id: id,
-            blob_length: buf.len() as u32,
-            group_id,
-            checksum,
-        };
-
-        let len = header.buffer_length() as u32;
-        let write_id = self.writer_context.write_blob(header, buffer).await?;
+        let header = BlobHeader::new(id, buf.len() as u32, group_id, checksum);
+        let len = header.total_length() as u32;
+        let write_id = self.file_writer.write_blob(header, buffer).await?;
 
         let info = BlobInfo {
             file_key: write_id.file_key,
@@ -92,10 +86,10 @@ impl WriteContext {
     /// Commits the submitted blob information.
     pub async fn commit(mut self) -> io::Result<()> {
         if self.did_op {
-            self.writer_context.sync().await?;
+            self.file_writer.sync().await?;
             trace!("Commit complete");
 
-            let file_key = self.writer_context.file_key();
+            let file_key = self.file_writer.file_key();
             // Reflect the changes to readers.
             self.readers_cache.forget(file_key);
 
