@@ -419,7 +419,7 @@ mod tests {
         assert!(index.get(3).is_some(), "Blob should exist");
         assert!(index.get(4).is_none(), "Blob should NOT exist");
 
-        index.remove(2);
+        index.remove_many([2]);
 
         assert!(index.get(1).is_some(), "Blob should exist");
         assert!(index.get(2).is_none(), "Blob should NOT exist");
