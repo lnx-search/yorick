@@ -63,6 +63,18 @@ async fn test_storage(service: YorickStorageService) {
         "Blob data should match",
     );
 
+    let mut ctx = service.create_write_ctx();
+    ctx.write_blob(2, 4, b"").await.expect("Write data");
+    ctx.commit().await.expect("Commit changes");
+
+    let ctx = service.create_read_ctx();
+    let data = ctx.read_blob(1).await.expect("Read blob");
+    assert_eq!(
+        data.as_ref().map(|v| v.as_ref()),
+        Some(b"Hello, world".as_slice()),
+        "Blob data should match",
+    );
+
     service.shutdown();
 
     std::fs::remove_dir_all(dir).unwrap();

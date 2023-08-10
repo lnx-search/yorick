@@ -111,22 +111,21 @@ impl Deref for ReadBuffer {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
-        &self.inner[BlobHeader::SIZE..]
+        &self.inner
     }
 }
 
 impl AsRef<[u8]> for ReadBuffer {
     fn as_ref(&self) -> &[u8] {
-        let buf: &[u8] = self.inner.as_ref();
-        &buf[BlobHeader::SIZE..]
+        self.inner.as_ref()
     }
 }
 
 impl ReadBuffer {
     /// Creates a new read buffer from a given slice.
     pub(crate) fn copy_from(buffer: &[u8]) -> Self {
-        let mut buf = ReadBufferInner::with_capacity(buffer.len());
-        buf.extend_from_slice(buffer);
+        let mut buf = ReadBufferInner::with_capacity(buffer.len() - BlobHeader::SIZE);
+        buf.extend_from_slice(&buffer[BlobHeader::SIZE..]);
         Self { inner: buf }
     }
 }
