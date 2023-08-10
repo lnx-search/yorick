@@ -20,7 +20,7 @@ pub struct ReaderTask {
     pub(super) global_limiter: Arc<Semaphore>,
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl Task for ReaderTask {
     async fn spawn(self) {
         let (tx, rx) = tachyonix::channel(5);
@@ -59,7 +59,7 @@ impl ReaderMailbox {
     pub async fn close(&self) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::Close { tx }).await?;
-        rx.await.map_err(|e| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error())?
     }
 
     /// Performs a random read on the file at the given position reading `len` bytes.
@@ -68,7 +68,7 @@ impl ReaderMailbox {
         let ctx = ReadContext { pos, len, tx };
 
         self.send_op(IoOp::Read { ctx }).await?;
-        rx.await.map_err(|e| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error())?
     }
 
     async fn send_op(&self, op: IoOp) -> io::Result<()> {

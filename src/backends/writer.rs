@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::backends::buffered;
 #[cfg(feature = "direct-io-backend")]
-use crate::backends::{directio, WriteBuffer};
+use crate::backends::directio;
 use crate::{BlobHeader, FileKey, WriteId};
 
 #[derive(Clone)]
@@ -61,7 +61,7 @@ impl FileWriter {
             FileWriterInner::Buffered(writer) => writer.write_blob(header, buf).await,
             #[cfg(feature = "direct-io-backend")]
             FileWriterInner::DirectIo(writer) => {
-                let buffer = directio::WriteBuffer::new(buffer);
+                let buffer = Box::new(buffer) as directio::WriteBuffer;
                 writer.write_blob(header, buffer).await
             },
         };

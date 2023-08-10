@@ -180,7 +180,7 @@ fn get_max_file_position_from_current_index(
             let end = info.start_pos() + info.len() as u64;
 
             max_file_positions
-                .entry(info.current_file_key())
+                .entry(info.file_key())
                 .and_modify(|v| {
                     *v = cmp::max(*v, end);
                 })

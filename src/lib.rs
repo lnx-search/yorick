@@ -4,14 +4,14 @@ extern crate tracing;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::time::Instant;
 
 use rkyv::{Archive, Deserialize, Serialize};
 use tokio::io;
 
 use crate::index::IndexBackgroundSnapshotter;
 use crate::read::{ReadContext, ReaderCache};
+use crate::tools::KillSwitch;
 use crate::write::{WriteContext, WriterContext, WriterSizeController};
 
 mod backends;
@@ -20,6 +20,7 @@ mod index;
 mod init;
 mod merge;
 mod read;
+mod tools;
 mod write;
 
 #[cfg(feature = "direct-io-backend")]
@@ -45,14 +46,17 @@ pub struct StorageServiceConfig {
     pub max_file_size: u64,
 }
 
+#[derive(Clone)]
 /// The primary storage service that controls reading and writing data.
 pub struct YorickStorageService {
+    /// The active IO backend.
+    backend: StorageBackend,
     /// The writer context.
     writer_context: WriterContext,
     /// The actor which controls automatic file rollover's kill switch.
-    size_controller_stop_signal: Arc<AtomicBool>,
+    size_controller_switch: KillSwitch,
     /// The actor which creates snapshots of the in memory index.
-    index_snapshot_stop_signal: Arc<AtomicBool>,
+    index_snapshot_switch: KillSwitch,
     /// The live blob lookup table/index.
     blob_index: BlobIndex,
     /// The live reader cache.
@@ -66,6 +70,9 @@ impl YorickStorageService {
         backend: StorageBackend,
         config: StorageServiceConfig,
     ) -> io::Result<Self> {
+        info!("Creating storage service");
+
+        let start = Instant::now();
         let data_directory = get_data_path(&config.base_path);
         let indexes_directory = get_index_path(&config.base_path);
 
@@ -84,7 +91,7 @@ impl YorickStorageService {
         let writer = backend.open_writer(next_file_key, &writer_path).await?;
         let writer_context = WriterContext::new(writer);
 
-        let size_controller_stop_signal = WriterSizeController::spawn(
+        let size_controller_switch = WriterSizeController::spawn(
             config.max_file_size,
             next_file_key.0 + 1,
             data_directory.clone(),
@@ -93,39 +100,45 @@ impl YorickStorageService {
         )
         .await;
 
-        let index_snapshot_stop_signal = IndexBackgroundSnapshotter::spawn(
+        let index_snapshot_switch = IndexBackgroundSnapshotter::spawn(
             current_snapshot_id,
             &indexes_directory,
             blob_index.clone(),
         );
 
-        let readers = ReaderCache::new(backend, data_directory);
+        let readers = ReaderCache::new(backend.clone(), data_directory);
+
+        info!(elapsed = ?start.elapsed(), "Service has been setup");
 
         Ok(Self {
+            backend,
             writer_context,
-            size_controller_stop_signal,
-            index_snapshot_stop_signal,
+            size_controller_switch,
+            index_snapshot_switch,
             blob_index,
             readers,
         })
     }
 
     /// Shuts down the manager.
-    pub fn shutdown(&self) {
-        self.index_snapshot_stop_signal
-            .store(true, Ordering::Relaxed);
-        self.size_controller_stop_signal
-            .store(true, Ordering::Relaxed);
+    pub fn shutdown(&self) -> io::Result<()> {
+        self.size_controller_switch.set_killed();
+        self.index_snapshot_switch.set_killed();
+        self.backend.wait_shutdown()
     }
 
     /// Creates a new write context for writing blobs of data.
     pub fn create_write_ctx(&self) -> WriteContext {
-        WriteContext::new(&self.blob_index, &self.readers, self.writer_context.get())
+        WriteContext::new(
+            self.blob_index.clone(),
+            self.readers.clone(),
+            self.writer_context.get(),
+        )
     }
 
     /// Creates a read context for reading blobs.
     pub fn create_read_ctx(&self) -> ReadContext {
-        ReadContext::new(&self.blob_index, &self.readers)
+        ReadContext::new(self.blob_index.clone(), self.readers.clone())
     }
 }
 
@@ -172,8 +185,21 @@ impl WriteId {
             end_pos: pos,
         }
     }
+
+    #[inline]
+    /// The file key of where the data is written.
+    pub fn file_key(&self) -> FileKey {
+        self.file_key
+    }
+
+    #[inline]
+    /// The end position of the blob.
+    pub fn end_pos(&self) -> u64 {
+        self.end_pos
+    }
 }
 
+#[derive(Debug, Copy, Clone)]
 /// A metadata header for each blob entry.
 pub struct BlobHeader {
     /// The ID of the blob.

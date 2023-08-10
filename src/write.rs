@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, mem};
@@ -10,6 +9,7 @@ use smallvec::SmallVec;
 use tokio::time::interval;
 
 use crate::read::ReaderCache;
+use crate::tools::KillSwitch;
 use crate::{
     BlobHeader,
     BlobId,
@@ -22,18 +22,18 @@ use crate::{
 };
 
 /// An active write context that allows you to write blobs of data to the service.
-pub struct WriteContext<'a> {
+pub struct WriteContext {
     did_op: bool,
-    blob_index: &'a BlobIndex,
-    readers_cache: &'a ReaderCache,
+    blob_index: BlobIndex,
+    readers_cache: ReaderCache,
     writer_context: FileWriter,
     queued_changes: SmallVec<[(BlobId, BlobInfo); 1]>,
 }
 
-impl<'a> WriteContext<'a> {
+impl WriteContext {
     pub(crate) fn new(
-        index: &'a BlobIndex,
-        readers: &'a ReaderCache,
+        index: BlobIndex,
+        readers: ReaderCache,
         writer: FileWriter,
     ) -> Self {
         Self {
@@ -45,6 +45,7 @@ impl<'a> WriteContext<'a> {
         }
     }
 
+    #[instrument("write-blob", skip(self, buffer))]
     /// Writes a blob to the storage service.
     ///
     /// Each blob can be tagged with an ID and group ID.
@@ -87,10 +88,12 @@ impl<'a> WriteContext<'a> {
         Ok(write_id)
     }
 
+    #[instrument("commit", skip(self))]
     /// Commits the submitted blob information.
     pub async fn commit(mut self) -> io::Result<()> {
         if self.did_op {
             self.writer_context.sync().await?;
+            trace!("Commit complete");
 
             let file_key = self.writer_context.file_key();
             // Reflect the changes to readers.
@@ -111,7 +114,7 @@ pub(crate) struct WriterSizeController {
     next_file_key: u32,
     base_path: PathBuf,
     backend: StorageBackend,
-    stop_signal: Arc<AtomicBool>,
+    kill_switch: KillSwitch,
     writer_context: WriterContext,
 }
 
@@ -123,21 +126,21 @@ impl WriterSizeController {
         base_path: PathBuf,
         backend: StorageBackend,
         writer_context: WriterContext,
-    ) -> Arc<AtomicBool> {
-        let stop_signal = Arc::new(AtomicBool::new(false));
+    ) -> KillSwitch {
+        let kill_switch = KillSwitch::new();
 
         let actor = Self {
             threshold,
             next_file_key,
             base_path,
             backend,
-            stop_signal: stop_signal.clone(),
+            kill_switch: kill_switch.clone(),
             writer_context,
         };
 
         tokio::spawn(actor.run());
 
-        stop_signal
+        kill_switch
     }
 
     #[instrument("writer-size-controller", skip_all)]
@@ -145,13 +148,20 @@ impl WriterSizeController {
         let mut interval = interval(Duration::from_secs(1));
         loop {
             interval.tick().await;
+            trace!("Checking file size of writer...");
 
-            if self.stop_signal.load(Ordering::Relaxed) {
+            if self.kill_switch.is_killed() {
+                debug!("Size controller got shutdown signal");
                 break;
             }
 
             let size = self.writer_context.current_size();
             if size < self.threshold {
+                trace!(
+                    size = size,
+                    threshold = self.threshold,
+                    "File size is not above the required threshold to warrant swapping",
+                );
                 continue;
             }
 
@@ -186,6 +196,8 @@ impl WriterSizeController {
                 }
             }
         }
+
+        info!("File size controller shutting down");
     }
 
     /// Creates a new writer and replaces the old (now full) writer.

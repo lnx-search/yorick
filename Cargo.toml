@@ -34,8 +34,8 @@ lz4_flex = { version = "0.11", default-features = false, optional = true }
 evmap = { git = "https://github.com/lnx-search/evmap.git", rev = "e470ff3" }
 
 [dev-dependencies]
-uuid = { version = "1.3.3", features = ["v4"] }
 tokio = { version = "1", default-features = false, features = ["full"] }
+test-utils = { path = "test-utils" }
 
 [features]
 default = ["rkyv_size_32", "compress-index"]
@@ -52,3 +52,9 @@ rkyv_size_32 = ["rkyv/size_32"]
 # Enables `rkyv` `size_64` feature, treating `usize` values as 64 bit ints.
 rkyv_size_64 = ["rkyv/size_64"]
 compress-index = ["lz4_flex"]
+
+[workspace]
+members = [
+    "test-utils",
+    "benchmarks"
+]

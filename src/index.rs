@@ -1,8 +1,9 @@
 use std::io;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ahash::random_state::RandomState;
 use evmap::StableHashEq;
@@ -10,6 +11,7 @@ use exponential_backoff::Backoff;
 use parking_lot::Mutex;
 use rkyv::{AlignedVec, Archive, Deserialize, Serialize};
 
+use crate::tools::KillSwitch;
 use crate::{get_snapshot_file, BlobId, FileKey, WriteId};
 
 type ReadHandle = evmap::handles::ReadHandle<BlobId, BlobInfo, (), RandomState>;
@@ -229,7 +231,7 @@ pub struct BlobInfo {
 impl BlobInfo {
     #[inline]
     /// The unique file ID of where the blob is stored.
-    pub fn current_file_key(&self) -> FileKey {
+    pub fn file_key(&self) -> FileKey {
         self.file_key
     }
 
@@ -282,8 +284,9 @@ fn create_reader_writer_map(capacity: usize) -> (WriteHandle, ReadHandle) {
 pub(crate) struct IndexBackgroundSnapshotter {
     next_snapshot_id: u64,
     base_path: PathBuf,
-    shutdown_signal: Arc<AtomicBool>,
+    kill_switch: KillSwitch,
     index: BlobIndex,
+    last_cleanup: Instant,
 }
 
 impl IndexBackgroundSnapshotter {
@@ -291,13 +294,14 @@ impl IndexBackgroundSnapshotter {
         current_snapshot_id: u64,
         base_path: &Path,
         index: BlobIndex,
-    ) -> Arc<AtomicBool> {
-        let shutdown_signal = Arc::new(AtomicBool::new(false));
+    ) -> KillSwitch {
+        let kill_switch = KillSwitch::new();
         let actor = Self {
             next_snapshot_id: current_snapshot_id + 1,
             base_path: base_path.to_path_buf(),
             index,
-            shutdown_signal: shutdown_signal.clone(),
+            kill_switch: kill_switch.clone(),
+            last_cleanup: Instant::now(),
         };
 
         std::thread::Builder::new()
@@ -305,15 +309,16 @@ impl IndexBackgroundSnapshotter {
             .spawn(move || actor.run())
             .expect("Spawn background thread");
 
-        shutdown_signal
+        kill_switch
     }
 
+    #[instrument("index-snapshot", skip_all)]
     fn run(mut self) {
         let mut last_counter = 0;
         loop {
             std::thread::sleep(Duration::from_millis(750));
 
-            if self.shutdown_signal.load(Ordering::Relaxed) {
+            if self.kill_switch.is_killed() {
                 break;
             }
 
@@ -324,17 +329,25 @@ impl IndexBackgroundSnapshotter {
 
             let backoff =
                 Backoff::new(3, Duration::from_secs(1), Duration::from_secs(5));
+            let mut attempt = 0;
             for backoff in &backoff {
+                attempt += 1;
                 match self.try_snapshot() {
                     Ok(()) => {
                         debug!(
+                            attempt = attempt,
                             snapshot_id = self.next_snapshot_id - 1,
                             "Created snapshot"
                         );
                         last_counter = changed_counter;
+                        break;
                     },
                     Err(e) => {
-                        error!(error = ?e, "Failed to create index snapshot");
+                        error!(
+                            attempt = attempt,
+                            error = ?e,
+                            "Failed to create index snapshot",
+                        );
                         std::thread::sleep(backoff);
                     },
                 }
@@ -349,11 +362,46 @@ impl IndexBackgroundSnapshotter {
         let snapshot = self.index.create_snapshot();
         let path = get_snapshot_file(&self.base_path, next_id);
 
-        std::fs::write(&path, snapshot)?;
+        let mut file = std::fs::File::create(&path)?;
+        file.write_all(&snapshot)?;
+        file.sync_all()?;
 
         if let Some(parent) = path.parent() {
             sync_directory(parent)?;
         }
+
+        if let Err(e) = self.try_cleanup_old_files(&path) {
+            warn!(error = ?e, "Failed to cleanup old snapshot files");
+        }
+
+        Ok(())
+    }
+
+    fn try_cleanup_old_files(&mut self, exclude_file: &Path) -> io::Result<()> {
+        // We only really need to cleanup files every so often.
+        if self.last_cleanup.elapsed() < Duration::from_secs(10) {
+            return Ok(());
+        }
+
+        let dir = self.base_path.read_dir()?;
+
+        for entry in dir {
+            let entry = entry?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                warn!(path = %path.display(), "Ignoring directory in snapshot directory");
+                continue;
+            }
+
+            if path != exclude_file {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    warn!(path = %path.display(), error = ?e, "Failed to cleanup old files");
+                }
+            }
+        }
+
+        self.last_cleanup = Instant::now();
 
         Ok(())
     }

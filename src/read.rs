@@ -6,15 +6,24 @@ use ahash::{HashMap, HashMapExt};
 use arc_swap::ArcSwap;
 
 use crate::backends::ReadBuffer;
-use crate::{get_data_file, BlobId, BlobIndex, FileKey, FileReader, StorageBackend};
+use crate::{
+    get_data_file,
+    BlobId,
+    BlobIndex,
+    BlobInfo,
+    FileKey,
+    FileReader,
+    StorageBackend,
+};
 
-pub struct ReadContext<'a> {
-    blob_index: &'a BlobIndex,
-    readers: &'a ReaderCache,
+/// A context manager for performing read operations.
+pub struct ReadContext {
+    blob_index: BlobIndex,
+    readers: ReaderCache,
 }
 
-impl<'a> ReadContext<'a> {
-    pub(crate) fn new(index: &'a BlobIndex, readers: &'a ReaderCache) -> Self {
+impl ReadContext {
+    pub(crate) fn new(index: BlobIndex, readers: ReaderCache) -> Self {
         Self {
             blob_index: index,
             readers,
@@ -22,7 +31,7 @@ impl<'a> ReadContext<'a> {
     }
 
     /// Read a blob from the service.
-    pub async fn read_blob(&self, blob_id: BlobId) -> io::Result<Option<ReadBuffer>> {
+    pub async fn read_blob(&self, blob_id: BlobId) -> io::Result<Option<ReadResult>> {
         let info = match self.blob_index.get(blob_id) {
             None => return Ok(None),
             Some(info) => info,
@@ -32,10 +41,21 @@ impl<'a> ReadContext<'a> {
         reader
             .read_at(info.start_pos() as usize, info.len() as usize)
             .await
-            .map(Some)
+            .map(|data| Some(ReadResult { info, data }))
     }
 }
 
+/// The read data and blob info from a read request.
+pub struct ReadResult {
+    pub info: BlobInfo,
+    pub data: ReadBuffer,
+}
+
+#[derive(Clone)]
+/// A cache of live readers which are open.
+///
+/// This manages opening new readers, and closing old readers
+/// which may have stale data.
 pub(crate) struct ReaderCache {
     live_readers: Arc<ArcSwap<HashMap<FileKey, FileReader>>>,
     backend: StorageBackend,

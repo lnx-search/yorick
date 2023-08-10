@@ -32,7 +32,7 @@ pub struct StorageBackend {
 
 impl StorageBackend {
     /// Creates a new buffered IO backend with a given config.
-    pub async fn create_blocking_io(config: BufferedIoConfig) -> io::Result<Self> {
+    pub async fn create_buffered_io(config: BufferedIoConfig) -> io::Result<Self> {
         let backend = buffered::BufferedIoBackend::create(config)?;
         Ok(Self {
             inner: StorageBackendInner::BufferedIo(backend),
@@ -85,6 +85,17 @@ impl StorageBackend {
                 .open_reader(file_key, path)
                 .await
                 .map(reader::FileReader::from),
+        }
+    }
+
+    /// Waits for the backend to shutdown.
+    ///
+    /// This is a blocking operations.
+    pub fn wait_shutdown(&self) -> io::Result<()> {
+        match &self.inner {
+            #[cfg(feature = "direct-io-backend")]
+            StorageBackendInner::DirectIo(backend) => backend.wait_for_shutdown(),
+            _ => Ok(()),
         }
     }
 }

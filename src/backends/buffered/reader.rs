@@ -34,7 +34,7 @@ impl Reader {
         let map = unsafe { Mmap::map(&file)? };
 
         #[cfg(unix)]
-        unsafe {
+        {
             use memmap2::Advice;
             map.advise(Advice::Random)?;
         }

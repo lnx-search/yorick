@@ -1,9 +1,10 @@
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
-use std::{cmp, io};
+use std::{cmp, io, mem};
 
-use glommio::{LocalExecutorBuilder, Placement};
+use glommio::{ExecutorJoinHandle, LocalExecutorBuilder, Placement};
+use parking_lot::Mutex;
 use tokio::sync::{oneshot, Semaphore};
 
 pub(crate) use self::reader::ReaderMailbox;
@@ -20,16 +21,45 @@ mod writer;
 pub const DEFAULT_MAX_READ_CONCURRENCY: usize = 64;
 
 /// The buffer type used when passing values to write.
-pub type WriteBuffer = Box<dyn AsRef<[u8]>>;
-type BoxedTask = Box<dyn Task>;
-type TasksTx = flume::Sender<BoxedTask>;
-type TasksRx = flume::Receiver<BoxedTask>;
+pub type WriteBuffer = Box<dyn AsRef<[u8]> + Send>;
+type TasksTx = flume::Sender<Option<TaskSelector>>;
+type TasksRx = flume::Receiver<Option<TaskSelector>>;
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 trait Task: Send + Sync + 'static {
     /// Called in the context of a given runtime which will manage
     /// the task.
     async fn spawn(self);
+}
+
+/// A static enum for selecting wrapping tasks.
+///
+/// Because boxed traits cannot consume themselves.
+pub enum TaskSelector {
+    Reader(ReaderTask),
+    Writer(WriterTask),
+}
+
+impl From<ReaderTask> for TaskSelector {
+    fn from(value: ReaderTask) -> Self {
+        Self::Reader(value)
+    }
+}
+
+impl From<WriterTask> for TaskSelector {
+    fn from(value: WriterTask) -> Self {
+        Self::Writer(value)
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Task for TaskSelector {
+    async fn spawn(self) {
+        match self {
+            Self::Reader(reader) => reader.spawn().await,
+            Self::Writer(writer) => writer.spawn().await,
+        }
+    }
 }
 
 pub(super) fn lost_contact_error() -> io::Error {
@@ -77,6 +107,7 @@ pub struct DirectIoBackend {
     /// The global limiter preventing too many reads from attempting
     /// to occur at one time.
     global_read_limiter: Arc<Semaphore>,
+    handles: Arc<Mutex<Vec<ExecutorJoinHandle<()>>>>,
 }
 
 impl DirectIoBackend {
@@ -88,13 +119,19 @@ impl DirectIoBackend {
         let global_read_limiter = Arc::new(Semaphore::new(config.max_read_concurrency));
         let (tasks_tx, tasks_rx) = flume::bounded(config.num_threads * 2);
 
+        let mut handles = Vec::with_capacity(config.num_threads);
         for shard_id in 0..config.num_threads {
-            spawn_executor_thread(shard_id, config, tasks_rx.clone()).await?;
+            let handle =
+                spawn_executor_thread(shard_id, config, tasks_rx.clone()).await?;
+            handles.push(handle);
         }
+
+        info!(num_threads = config.num_threads, "Created shards");
 
         Ok(Self {
             task_submitter: tasks_tx,
             global_read_limiter,
+            handles: Arc::new(Mutex::new(handles)),
         })
     }
 
@@ -112,7 +149,7 @@ impl DirectIoBackend {
             tx,
         };
 
-        self.schedule_task(Box::new(task)).await?;
+        self.schedule_task(task.into()).await?;
 
         rx.await.map_err(|_| lost_contact_error())?
     }
@@ -132,16 +169,33 @@ impl DirectIoBackend {
             global_limiter: self.global_read_limiter.clone(),
         };
 
-        self.schedule_task(Box::new(task)).await?;
+        self.schedule_task(task.into()).await?;
 
         rx.await.map_err(|_| lost_contact_error())?
     }
 
-    async fn schedule_task(&self, op: BoxedTask) -> io::Result<()> {
+    async fn schedule_task(&self, op: TaskSelector) -> io::Result<()> {
         self.task_submitter
-            .send_async(op)
+            .send_async(Some(op))
             .await
             .map_err(|_| lost_contact_error())
+    }
+
+    /// Waits for the backend threads to shutdown.
+    pub fn wait_for_shutdown(&self) -> io::Result<()> {
+        while let Ok(()) = self.task_submitter.send(None) {
+            continue;
+        }
+
+        let handles = mem::take(&mut *self.handles.lock());
+
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|e| io::Error::new(ErrorKind::Other, e.to_string()))?;
+        }
+
+        Ok(())
     }
 }
 
@@ -149,7 +203,7 @@ async fn spawn_executor_thread(
     shard_id: usize,
     config: DirectIoConfig,
     tasks_rx: TasksRx,
-) -> io::Result<()> {
+) -> io::Result<ExecutorJoinHandle<()>> {
     let name = format!("yorick-executor-{shard_id}");
 
     let (waiter_tx, waiter_rx) = oneshot::channel();
@@ -175,22 +229,23 @@ async fn spawn_executor_thread(
 
     debug!("Executor shard spawned successfully");
 
-    Ok(())
+    Ok(handle)
 }
 
 #[instrument("direct-io", skip(tasks_rx, waiter_tx))]
 /// The main task entrypoint.
 async fn executor_task(
-    shard_id: usize,
+    #[allow(unused_variables)] shard_id: usize,
     tasks_rx: TasksRx,
     waiter_tx: oneshot::Sender<()>,
 ) {
     let _ = waiter_tx.send(());
 
-    while let Ok(task) = tasks_rx.recv_async().await {
+    info!("Task executor is running");
+
+    while let Ok(Some(task)) = tasks_rx.recv_async().await {
         task.spawn().await;
     }
 
-    // Not needed, just for logging and tracing.
-    drop(shard_id);
+    info!("Task executor has shutdown");
 }

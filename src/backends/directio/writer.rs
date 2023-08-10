@@ -18,17 +18,24 @@ pub struct WriterTask {
     pub(super) tx: oneshot::Sender<io::Result<WriterMailbox>>,
 }
 
-#[async_trait::async_trait]
+#[async_trait::async_trait(?Send)]
 impl Task for WriterTask {
     async fn spawn(self) {
         let (tx, rx) = tachyonix::channel(5);
 
-        let actor = WriterActor::create(self.file_key, &self.path, rx).await;
+        let res = WriterActor::create(self.file_key, &self.path, rx).await;
 
-        glommio::spawn_local(actor.run()).detach();
+        match res {
+            Ok(actor) => {
+                glommio::spawn_local(actor.run()).detach();
 
-        let mailbox = WriterMailbox { tx };
-        let _ = self.tx.send(Ok(mailbox));
+                let mailbox = WriterMailbox { tx };
+                let _ = self.tx.send(Ok(mailbox));
+            },
+            Err(e) => {
+                let _ = self.tx.send(Err(e));
+            },
+        }
     }
 }
 
@@ -102,7 +109,7 @@ impl WriterActor {
 
         let writer = DmaStreamWriterBuilder::new(file)
             .with_write_behind(10)
-            .with_buffer_size(512 << 10)
+            .with_buffer_size(128 << 10)
             .build();
 
         Ok(Self {
@@ -131,14 +138,14 @@ impl WriterActor {
     async fn handle_op(&mut self, op: IoOp) {
         match op {
             IoOp::WriteBlob { header, buffer, tx } => {
-                let res = self.writer.write_all(header.as_bytes()).await;
+                let res = self.writer.write_all(&header.as_bytes()).await;
                 maybe_log_err!(res);
                 if let Err(e) = res {
                     let _ = tx.send(Err(e));
                     return;
                 }
 
-                let res = self.writer.write_all(buffer.as_ref()).await;
+                let res = self.writer.write_all((*buffer).as_ref()).await;
                 maybe_log_err!(res);
                 if let Err(e) = res {
                     let _ = tx.send(Err(e));
