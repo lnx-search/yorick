@@ -134,6 +134,7 @@ impl BlobIndex {
 
         #[cfg(not(feature = "compress-index"))]
         {
+            let mut buffer = buffer.into_vec();
             buffer.push(0); // Indicate we're not compressed
             buffer
         }
@@ -363,7 +364,7 @@ impl IndexBackgroundSnapshotter {
 fn sync_directory(dir: &Path) -> io::Result<()> {
     use std::fs::File;
 
-    let file = File::open(path)?;
+    let file = File::open(dir)?;
     file.sync_data()?;
 
     Ok(())
