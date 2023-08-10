@@ -384,33 +384,35 @@ mod tests {
     #[test]
     fn test_index_basic_functionality() {
         let index = BlobIndex::default();
-        index.insert(
-            1,
-            BlobInfo {
-                file_key: FileKey(1),
-                start_pos: 0,
-                len: 3,
-                group_id: 0,
-            },
-        );
-        index.insert(
-            2,
-            BlobInfo {
-                file_key: FileKey(1),
-                start_pos: 0,
-                len: 3,
-                group_id: 0,
-            },
-        );
-        index.insert(
-            3,
-            BlobInfo {
-                file_key: FileKey(1),
-                start_pos: 0,
-                len: 3,
-                group_id: 0,
-            },
-        );
+        index.insert_many([
+            (
+                1,
+                BlobInfo {
+                    file_key: FileKey(1),
+                    start_pos: 0,
+                    len: 3,
+                    group_id: 0,
+                },
+            ),
+            (
+                2,
+                BlobInfo {
+                    file_key: FileKey(1),
+                    start_pos: 0,
+                    len: 3,
+                    group_id: 0,
+                },
+            ),
+            (
+                3,
+                BlobInfo {
+                    file_key: FileKey(1),
+                    start_pos: 0,
+                    len: 3,
+                    group_id: 0,
+                },
+            ),
+        ]);
 
         assert!(index.get(1).is_some(), "Blob should exist");
         assert!(index.get(2).is_some(), "Blob should exist");
@@ -428,33 +430,35 @@ mod tests {
     #[test]
     fn test_index_snapshot() {
         let index = BlobIndex::default();
-        index.insert(
-            1,
-            BlobInfo {
-                file_key: FileKey(1),
-                start_pos: 0,
-                len: 3,
-                group_id: 0,
-            },
-        );
-        index.insert(
-            2,
-            BlobInfo {
-                file_key: FileKey(1),
-                start_pos: 0,
-                len: 3,
-                group_id: 0,
-            },
-        );
-        index.insert(
-            5,
-            BlobInfo {
-                file_key: FileKey(1),
-                start_pos: 0,
-                len: 3,
-                group_id: 0,
-            },
-        );
+        index.insert_many([
+            (
+                1,
+                BlobInfo {
+                    file_key: FileKey(1),
+                    start_pos: 0,
+                    len: 3,
+                    group_id: 0,
+                },
+            ),
+            (
+                2,
+                BlobInfo {
+                    file_key: FileKey(1),
+                    start_pos: 0,
+                    len: 3,
+                    group_id: 0,
+                },
+            ),
+            (
+                5,
+                BlobInfo {
+                    file_key: FileKey(1),
+                    start_pos: 0,
+                    len: 3,
+                    group_id: 0,
+                },
+            ),
+        ]);
 
         let snapshot = index.create_snapshot();
         let loaded =

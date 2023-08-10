@@ -23,6 +23,9 @@ async fn test_buffered_io_read_write() {
         .expect("Create service");
 
     test_storage(service).await;
+
+    std::fs::remove_dir_all(dir).unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
 }
 
 #[cfg(feature = "direct-io-backend")]
@@ -46,6 +49,9 @@ async fn test_direct_io_read_write() {
         .expect("Create service");
 
     test_storage(service).await;
+
+    std::fs::remove_dir_all(dir).unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
 }
 
 async fn test_storage(service: YorickStorageService) {
@@ -76,9 +82,6 @@ async fn test_storage(service: YorickStorageService) {
     );
 
     service.shutdown();
-
-    std::fs::remove_dir_all(dir).unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
 }
 
 fn tmp_dir() -> PathBuf {
