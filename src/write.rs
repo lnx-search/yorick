@@ -60,12 +60,7 @@ impl WriteContext {
         );
 
         let checksum = crc32fast::hash(buf);
-        let header = BlobHeader::new(
-            id,
-            buf.len() as u32,
-            group_id,
-            checksum,
-        );
+        let header = BlobHeader::new(id, buf.len() as u32, group_id, checksum);
         self.write_header_and_data(header, buffer).await
     }
 

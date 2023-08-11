@@ -224,6 +224,7 @@ struct KeyValuePair {
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, Archive, Serialize, Deserialize)]
+#[cfg_attr(test, derive(Default))]
 /// Metadata info about a specific blob.
 pub struct BlobInfo {
     /// The unique file ID of where the blob is stored.
@@ -276,7 +277,6 @@ impl BlobInfo {
     pub fn merge_counter(&self) -> usize {
         self.merge_counter as usize
     }
-
 
     /// Checks if the blob was written before the given write ID.
     pub fn is_before(&self, write_id: WriteId) -> bool {

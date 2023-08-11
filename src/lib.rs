@@ -203,6 +203,7 @@ impl YorickStorageService {
 #[derive(
     Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Archive, Serialize, Deserialize,
 )]
+#[cfg_attr(test, derive(Default))]
 /// A unique identifier for a given file.
 pub struct FileKey(pub(crate) u32);
 impl Hash for FileKey {
@@ -304,7 +305,13 @@ impl BlobHeader {
 
     #[inline]
     /// Creates a new blob header with a given number of merges.
-    pub fn new_with_merges(blob_id: u64, blob_length: u32, group_id: u64, checksum: u32, merge_counter: u32) -> Self {
+    pub fn new_with_merges(
+        blob_id: u64,
+        blob_length: u32,
+        group_id: u64,
+        checksum: u32,
+        merge_counter: u32,
+    ) -> Self {
         let mut buffer = [0; Self::SIZE_INFO_ONLY];
 
         buffer[0..8].copy_from_slice(&blob_id.to_le_bytes());

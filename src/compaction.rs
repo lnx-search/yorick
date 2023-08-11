@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
@@ -395,19 +396,111 @@ impl BlobCompactor {
     }
 }
 
-/// Produces a set of merge plans from a given set of buckets.
-fn get_merge_plans(target_size: u64, buckets: &[MergeBucket]) -> Vec<MergePlan> {
-    todo!()
+macro_rules! btreeset {
+    ($( $val:expr $(,)? )+) => {{
+        let mut tree = std::collections::BTreeSet::new();
+
+        $(
+            tree.insert($val);
+        )*
+
+        tree
+    }};
 }
 
-#[derive(Debug)]
+/// Produces a set of merge plans from a given set of buckets.
+///
+/// This algorithm works off of the idea that it will incrementally combine larger
+/// and larger files together.
+///
+/// It does this by first combining blobs with the same group_id, forming the a set
+/// of plans with only one group ID as part of the merge.
+///
+/// Once this first step is done, we go over all of our plans and attempt to combine
+/// multiple plans into one larger plan provided we don't go over the target size.
+///
+/// Not this approach does not provide the perfect size files right off the bat, it
+/// gets our files reasonably close, but not exactly. It probably wants to become
+/// a bit smarter later on.
+fn get_merge_plans(target_size: u64, buckets: &[MergeBucket]) -> Vec<MergePlan> {
+    if buckets.is_empty() {
+        return Vec::new();
+    }
+
+    let mut plans = Vec::new();
+
+    // Build a sparse set of plans which are done on the group_id.
+    // These may not close to the target size, but it's a good step towards that goal.
+    let mut current_plan = MergePlan::default();
+    let mut current_group_id = None;
+    for bucket in buckets {
+        // If our groups don't match, or we're already at the target size.
+        if Some(bucket.group_id) != current_group_id
+            || (current_plan.estimated_size + bucket.total_size_approx) >= target_size
+        {
+            if !current_plan.group_ids.is_empty() {
+                plans.push(current_plan);
+            }
+
+            current_plan = MergePlan {
+                group_ids: btreeset! {bucket.group_id},
+                ..Default::default()
+            };
+            current_group_id = Some(bucket.group_id);
+        }
+
+        current_plan.estimated_size += bucket.total_size_approx;
+        current_plan.copy_blobs.extend_from_slice(&bucket.blobs);
+    }
+
+    if !current_plan.group_ids.is_empty() {
+        plans.push(current_plan);
+    }
+
+    plans.sort_by_key(|p| p.group_ids.first().copied());
+
+    let mut final_plans = Vec::new();
+    let mut current_plan = MergePlan::default();
+    // The first plan is always empty.
+    for plan in plans {
+        if plan.estimated_size >= target_size {
+            final_plans.push(plan);
+            continue;
+        }
+
+        if current_plan.estimated_size + plan.estimated_size >= target_size {
+            if !current_plan.group_ids.is_empty() {
+                final_plans.push(current_plan);
+            }
+            current_plan = MergePlan::default();
+        }
+
+        current_plan.group_ids.extend(plan.group_ids);
+        current_plan.copy_blobs.extend(plan.copy_blobs);
+        current_plan.estimated_size += plan.estimated_size;
+    }
+
+    if !current_plan.group_ids.is_empty() {
+        final_plans.push(current_plan);
+    }
+
+    final_plans
+}
+
+#[derive(Debug, Default)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 /// A planned merge operation of one or more files.
 struct MergePlan {
+    /// The estimated resulting file size.
+    estimated_size: u64,
+    /// The group IDs of the plan.
+    group_ids: BTreeSet<u64>,
     /// The blobs to copy into a new file.
     copy_blobs: Vec<BlobMetadata>,
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 /// A single merge operation bucket.
 struct MergeBucket {
     /// The group ID of the bucket.
@@ -421,6 +514,7 @@ struct MergeBucket {
 }
 
 #[derive(Debug, Copy, Clone)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 struct BlobMetadata {
     /// The ID of the blob.
     id: BlobId,
@@ -566,5 +660,355 @@ async fn fetch_and_check_against_policy(
         // Read the blob if we haven't already.
         let res = file_reader.read_at(pos as usize, len as usize).await?;
         Ok(Some(res))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_merge_policy_basic_single_plan() {
+        let blobs = vec![MergeBucket {
+            group_id: 0,
+            file_key: FileKey(1),
+            total_size_approx: 50,
+            blobs: vec![
+                BlobMetadata {
+                    id: 1,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 18,
+                        ..Default::default()
+                    },
+                },
+                BlobMetadata {
+                    id: 1,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 12,
+                        ..Default::default()
+                    },
+                },
+                BlobMetadata {
+                    id: 1,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 20,
+                        ..Default::default()
+                    },
+                },
+            ],
+        }];
+
+        let plan = get_merge_plans(100, &blobs);
+        assert_eq!(
+            plan,
+            [MergePlan {
+                estimated_size: 50,
+                group_ids: btreeset! {0},
+                copy_blobs: vec![
+                    BlobMetadata {
+                        id: 1,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 18,
+                            ..Default::default()
+                        },
+                    },
+                    BlobMetadata {
+                        id: 1,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 12,
+                            ..Default::default()
+                        },
+                    },
+                    BlobMetadata {
+                        id: 1,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 20,
+                            ..Default::default()
+                        },
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    /// This test just explicitly marks the potentially odd behaviour that the
+    /// merge will produce a plan that goes beyond the target size if a bucket already goes
+    /// beyond the target.
+    ///
+    /// This is fine, as in reality the compactor will only consider files which are below the limit
+    /// so a bucket can never actually be above the limit.
+    ///
+    /// This test is just so theres a bit of an explanation as to why.
+    fn test_merge_policy_basic_larger_plans_odd_behaviour() {
+        let blobs = vec![MergeBucket {
+            group_id: 0,
+            file_key: FileKey(1),
+            total_size_approx: 50,
+            blobs: vec![
+                BlobMetadata {
+                    id: 1,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 18,
+                        ..Default::default()
+                    },
+                },
+                BlobMetadata {
+                    id: 1,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 12,
+                        ..Default::default()
+                    },
+                },
+                BlobMetadata {
+                    id: 1,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 20,
+                        ..Default::default()
+                    },
+                },
+            ],
+        }];
+
+        let plan = get_merge_plans(20, &blobs);
+        assert_eq!(
+            plan,
+            [MergePlan {
+                estimated_size: 50,
+                group_ids: btreeset! {0},
+                copy_blobs: vec![
+                    BlobMetadata {
+                        id: 1,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 18,
+                            ..Default::default()
+                        },
+                    },
+                    BlobMetadata {
+                        id: 1,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 12,
+                            ..Default::default()
+                        },
+                    },
+                    BlobMetadata {
+                        id: 1,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 20,
+                            ..Default::default()
+                        },
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn test_merge_policy_multi_plan_merge() {
+        let blobs = vec![
+            MergeBucket {
+                group_id: 0,
+                file_key: FileKey(1),
+                total_size_approx: 30,
+                blobs: vec![
+                    BlobMetadata {
+                        id: 1,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 18,
+                            ..Default::default()
+                        },
+                    },
+                    BlobMetadata {
+                        id: 2,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 12,
+                            ..Default::default()
+                        },
+                    },
+                ],
+            },
+            MergeBucket {
+                group_id: 0,
+                file_key: FileKey(1),
+                total_size_approx: 20,
+                blobs: vec![BlobMetadata {
+                    id: 3,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 20,
+                        ..Default::default()
+                    },
+                }],
+            },
+            MergeBucket {
+                group_id: 0,
+                file_key: FileKey(1),
+                total_size_approx: 20,
+                blobs: vec![BlobMetadata {
+                    id: 4,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 20,
+                        ..Default::default()
+                    },
+                }],
+            },
+        ];
+
+        let plan = get_merge_plans(50, &blobs);
+        assert_eq!(
+            plan,
+            [
+                MergePlan {
+                    estimated_size: 30,
+                    group_ids: btreeset! {0},
+                    copy_blobs: vec![
+                        BlobMetadata {
+                            id: 1,
+                            info: BlobInfo {
+                                file_key: FileKey(1),
+                                len: 18,
+                                ..Default::default()
+                            },
+                        },
+                        BlobMetadata {
+                            id: 2,
+                            info: BlobInfo {
+                                file_key: FileKey(1),
+                                len: 12,
+                                ..Default::default()
+                            },
+                        },
+                    ],
+                },
+                MergePlan {
+                    estimated_size: 40,
+                    group_ids: btreeset! {0},
+                    copy_blobs: vec![
+                        BlobMetadata {
+                            id: 3,
+                            info: BlobInfo {
+                                file_key: FileKey(1),
+                                len: 20,
+                                ..Default::default()
+                            },
+                        },
+                        BlobMetadata {
+                            id: 4,
+                            info: BlobInfo {
+                                file_key: FileKey(1),
+                                len: 20,
+                                ..Default::default()
+                            },
+                        },
+                    ],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_merge_policy_grouping() {
+        let blobs = vec![
+            MergeBucket {
+                group_id: 0,
+                file_key: FileKey(1),
+                total_size_approx: 18,
+                blobs: vec![BlobMetadata {
+                    id: 1,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 18,
+                        group_id: 0,
+                        ..Default::default()
+                    },
+                }],
+            },
+            MergeBucket {
+                group_id: 1,
+                file_key: FileKey(1),
+                total_size_approx: 20,
+                blobs: vec![BlobMetadata {
+                    id: 3,
+                    info: BlobInfo {
+                        file_key: FileKey(1),
+                        len: 20,
+                        group_id: 1,
+                        ..Default::default()
+                    },
+                }],
+            },
+            MergeBucket {
+                group_id: 0,
+                file_key: FileKey(2),
+                total_size_approx: 20,
+                blobs: vec![BlobMetadata {
+                    id: 4,
+                    info: BlobInfo {
+                        file_key: FileKey(2),
+                        len: 20,
+                        ..Default::default()
+                    },
+                }],
+            },
+        ];
+
+        let plan = get_merge_plans(50, &blobs);
+        assert_eq!(
+            plan,
+            [
+                MergePlan {
+                    estimated_size: 38,
+                    group_ids: btreeset! {0},
+                    copy_blobs: vec![
+                        BlobMetadata {
+                            id: 1,
+                            info: BlobInfo {
+                                file_key: FileKey(1),
+                                len: 18,
+                                group_id: 0,
+                                ..Default::default()
+                            },
+                        },
+                        BlobMetadata {
+                            id: 4,
+                            info: BlobInfo {
+                                file_key: FileKey(2),
+                                len: 20,
+                                group_id: 0,
+                                ..Default::default()
+                            },
+                        },
+                    ],
+                },
+                MergePlan {
+                    estimated_size: 20,
+                    group_ids: btreeset! {1},
+                    copy_blobs: vec![BlobMetadata {
+                        id: 3,
+                        info: BlobInfo {
+                            file_key: FileKey(1),
+                            len: 20,
+                            group_id: 1,
+                            ..Default::default()
+                        },
+                    },],
+                },
+            ]
+        );
     }
 }
