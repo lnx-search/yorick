@@ -94,7 +94,7 @@ impl YorickStorageService {
         backend: StorageBackend,
         config: StorageServiceConfig,
     ) -> io::Result<Self> {
-        Self::create_with_compaction(backend, config, NoCompactionPolicy).await
+        Self::create_with_compaction(backend, config, DefaultCompactionPolicy).await
     }
 
     #[instrument("storage-service-create", skip(backend, compaction_policy))]
