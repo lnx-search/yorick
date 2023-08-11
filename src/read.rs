@@ -16,6 +16,7 @@ use crate::{
     StorageBackend,
 };
 
+#[derive(Clone)]
 /// A context manager for performing read operations.
 pub struct ReadContext {
     blob_index: BlobIndex,
@@ -30,7 +31,24 @@ impl ReadContext {
         }
     }
 
+    /// Gets access to the reader cache.
+    pub(crate) fn cache(&self) -> ReaderCache {
+        self.readers.clone()
+    }
+
+    #[inline]
+    /// Returns a reference to the blob index.
+    pub fn blob_index(&self) -> &BlobIndex {
+        &self.blob_index
+    }
+
     /// Read a blob from the service.
+    ///
+    /// This is treated as a random read operation, a reader will be created if
+    /// it is not already open.
+    ///
+    /// The operation returns the `ReadResult` if the blob exists which contains
+    /// the relevant metadata and buffer data.
     pub async fn read_blob(&self, blob_id: BlobId) -> io::Result<Option<ReadResult>> {
         let info = match self.blob_index.get(blob_id) {
             None => return Ok(None),
@@ -47,7 +65,9 @@ impl ReadContext {
 
 /// The read data and blob info from a read request.
 pub struct ReadResult {
+    /// The metadata info about the blob
     pub info: BlobInfo,
+    /// The raw data of the blob that does *not* include the blob header.
     pub data: ReadBuffer,
 }
 
@@ -93,7 +113,10 @@ impl ReaderCache {
 
     #[instrument("reader-cache", skip(self))]
     /// Attempts to get an existing, open reader or creates a new reader.
-    async fn get_or_create(&self, file_key: FileKey) -> io::Result<FileReader> {
+    pub(crate) async fn get_or_create(
+        &self,
+        file_key: FileKey,
+    ) -> io::Result<FileReader> {
         let guard = self.live_readers.load();
 
         if let Some(reader) = guard.get(&file_key).cloned() {

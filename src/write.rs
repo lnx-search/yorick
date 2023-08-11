@@ -8,12 +8,11 @@ use parking_lot::RwLock;
 use smallvec::SmallVec;
 use tokio::time::interval;
 
-use crate::read::ReaderCache;
-use crate::tools::KillSwitch;
+use crate::read::ReadContext;
+use crate::tools::{KillSwitch, LockingCounter};
 use crate::{
     BlobHeader,
     BlobId,
-    BlobIndex,
     BlobInfo,
     FileKey,
     FileWriter,
@@ -24,22 +23,16 @@ use crate::{
 /// An active write context that allows you to write blobs of data to the service.
 pub struct WriteContext {
     did_op: bool,
-    blob_index: BlobIndex,
-    readers_cache: ReaderCache,
+    read_context: ReadContext,
     file_writer: FileWriter,
     queued_changes: SmallVec<[(BlobId, BlobInfo); 1]>,
 }
 
 impl WriteContext {
-    pub(crate) fn new(
-        index: BlobIndex,
-        readers: ReaderCache,
-        writer: FileWriter,
-    ) -> Self {
+    pub(crate) fn new(reader: ReadContext, writer: FileWriter) -> Self {
         Self {
             did_op: false,
-            blob_index: index,
-            readers_cache: readers,
+            read_context: reader,
             file_writer: writer,
             queued_changes: SmallVec::new(),
         }
@@ -74,6 +67,7 @@ impl WriteContext {
             start_pos: write_id.end_pos - len as u64,
             len,
             group_id,
+            checksum,
         };
         self.queued_changes.push((id, info));
 
@@ -91,9 +85,10 @@ impl WriteContext {
 
             let file_key = self.file_writer.file_key();
             // Reflect the changes to readers.
-            self.readers_cache.forget(file_key);
-
-            self.blob_index.insert_many(self.queued_changes);
+            self.read_context.cache().forget(file_key);
+            self.read_context
+                .blob_index()
+                .insert_many(self.queued_changes);
             self.did_op = false;
         }
         Ok(())
@@ -105,31 +100,31 @@ impl WriteContext {
 /// once one file has reached a threshold.
 pub(crate) struct WriterSizeController {
     threshold: u64,
-    next_file_key: u32,
+    file_key_counter: LockingCounter,
     base_path: PathBuf,
     backend: StorageBackend,
     kill_switch: KillSwitch,
-    writer_context: WriterContext,
+    active_writer: ActiveWriter,
 }
 
 impl WriterSizeController {
     /// Spawns a new writer size controller actor, returning a stop signal.
     pub async fn spawn(
         threshold: u64,
-        next_file_key: u32,
+        file_key_counter: LockingCounter,
         base_path: PathBuf,
         backend: StorageBackend,
-        writer_context: WriterContext,
+        active_writer: ActiveWriter,
     ) -> KillSwitch {
         let kill_switch = KillSwitch::new();
 
         let actor = Self {
             threshold,
-            next_file_key,
+            file_key_counter,
             base_path,
             backend,
             kill_switch: kill_switch.clone(),
-            writer_context,
+            active_writer,
         };
 
         tokio::spawn(actor.run());
@@ -149,7 +144,7 @@ impl WriterSizeController {
                 break;
             }
 
-            let size = self.writer_context.current_size();
+            let size = self.active_writer.current_size();
             if size < self.threshold {
                 trace!(
                     size = size,
@@ -161,7 +156,6 @@ impl WriterSizeController {
 
             info!(
                 size = size,
-                next_file_key = self.next_file_key,
                 "Writer is full, preparing to create new writer",
             );
 
@@ -174,7 +168,6 @@ impl WriterSizeController {
                     Ok(new_file_key) => {
                         info!(
                             new_file_key = new_file_key,
-                            next_file_key = self.next_file_key,
                             "New writer has been created",
                         );
 
@@ -196,8 +189,7 @@ impl WriterSizeController {
 
     /// Creates a new writer and replaces the old (now full) writer.
     async fn create_new_writer(&mut self) -> io::Result<u32> {
-        let new_file_key = self.next_file_key;
-        self.next_file_key += 1;
+        let new_file_key = self.file_key_counter.inc();
 
         let path = crate::get_data_file(&self.base_path, FileKey(new_file_key));
         let writer = self
@@ -205,7 +197,7 @@ impl WriterSizeController {
             .open_writer(FileKey(new_file_key), &path)
             .await?;
 
-        let old_writer = self.writer_context.set_writer(writer);
+        let old_writer = self.active_writer.set_writer(writer);
         if let Err(e) = old_writer.sync().await {
             warn!(error = ?e, "Failed to sync old writer file due to error");
         }
@@ -215,12 +207,12 @@ impl WriterSizeController {
 }
 
 #[derive(Clone)]
-pub(crate) struct WriterContext {
+pub(crate) struct ActiveWriter {
     /// The currently active file writer.
     active_writer: Arc<RwLock<FileWriter>>,
 }
 
-impl WriterContext {
+impl ActiveWriter {
     pub(crate) fn new(writer: FileWriter) -> Self {
         Self {
             active_writer: Arc::new(RwLock::new(writer)),

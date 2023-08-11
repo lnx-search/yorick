@@ -57,6 +57,13 @@ impl BlobIndex {
     ) {
         let mut lock = self.writer.lock();
         for (blob_id, info) in iter {
+            if let Some(existing) = lock.get_one(&blob_id) {
+                // We already have newer data.
+                if existing.file_key() > info.file_key {
+                    continue;
+                }
+            }
+
             lock.update(blob_id, info);
         }
         lock.publish();
@@ -226,6 +233,8 @@ pub struct BlobInfo {
     pub(crate) len: u32,
     /// The ID of the group the blob belongs to.
     pub(crate) group_id: u64,
+    /// The checksum of the blob data.
+    pub(crate) checksum: u32,
 }
 
 impl BlobInfo {
@@ -440,6 +449,7 @@ mod tests {
                     start_pos: 0,
                     len: 3,
                     group_id: 0,
+                    checksum: 0,
                 },
             ),
             (
@@ -449,6 +459,7 @@ mod tests {
                     start_pos: 0,
                     len: 3,
                     group_id: 0,
+                    checksum: 0,
                 },
             ),
             (
@@ -458,6 +469,7 @@ mod tests {
                     start_pos: 0,
                     len: 3,
                     group_id: 0,
+                    checksum: 0,
                 },
             ),
         ]);
@@ -486,6 +498,7 @@ mod tests {
                     start_pos: 0,
                     len: 3,
                     group_id: 0,
+                    checksum: 0,
                 },
             ),
             (
@@ -495,6 +508,7 @@ mod tests {
                     start_pos: 0,
                     len: 3,
                     group_id: 0,
+                    checksum: 0,
                 },
             ),
             (
@@ -504,6 +518,7 @@ mod tests {
                     start_pos: 0,
                     len: 3,
                     group_id: 0,
+                    checksum: 0,
                 },
             ),
         ]);

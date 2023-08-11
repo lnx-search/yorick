@@ -6,16 +6,8 @@ use std::{cmp, io};
 
 use ahash::{HashMap, HashMapExt};
 
-use crate::{
-    get_data_file,
-    BlobHeader,
-    BlobId,
-    BlobIndex,
-    BlobInfo,
-    FileKey,
-    DATA_FILE_EXT,
-    INDEX_FILE_EXT,
-};
+use crate::tools::{parse_data_file_name, parse_snapshot_file_name};
+use crate::{get_data_file, BlobHeader, BlobId, BlobIndex, BlobInfo, FileKey};
 
 /// Finds the next available file key.
 pub async fn load_next_file_key(data_path: &Path) -> io::Result<FileKey> {
@@ -86,6 +78,9 @@ fn load_blob_index_inner(index_path: &Path, data_path: &Path) -> io::Result<Blob
         base_index.remove_from_file(file_key);
     }
 
+    // Load oldest key to newest key.
+    files_to_scan.sort_by_key(|v| v.0);
+
     for (file_key, start_from) in files_to_scan {
         let path = get_data_file(data_path, file_key);
 
@@ -145,6 +140,7 @@ where
             start_pos: cursor,
             len: header.total_length() as u32,
             group_id: header.group_id,
+            checksum: header.checksum,
         };
 
         (header_callback)(header.blob_id, info);
@@ -296,24 +292,6 @@ fn get_files_list(data_path: &Path) -> io::Result<Vec<(FileKey, PathBuf)>> {
     }
 
     Ok(keys)
-}
-
-fn parse_data_file_name(path: &Path) -> Option<FileKey> {
-    let name_c_str = path.file_name()?;
-    let name_str = name_c_str
-        .to_str()?
-        .strip_suffix(DATA_FILE_EXT)?
-        .strip_suffix('.')?;
-    name_str.parse::<u32>().ok().map(FileKey)
-}
-
-fn parse_snapshot_file_name(path: &Path) -> Option<u64> {
-    let name_c_str = path.file_name()?;
-    let name_str = name_c_str
-        .to_str()?
-        .strip_suffix(INDEX_FILE_EXT)?
-        .strip_suffix('.')?;
-    name_str.parse::<u64>().ok()
 }
 
 #[cfg(test)]

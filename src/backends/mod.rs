@@ -2,6 +2,9 @@ use std::io;
 use std::ops::Deref;
 use std::path::Path;
 
+use ahash::HashSet;
+
+use crate::tools::ActiveWriterTracker;
 use crate::{BlobHeader, FileKey};
 
 mod buffered;
@@ -28,14 +31,21 @@ type ReadBufferInner = rkyv::AlignedVec;
 /// The core storage backend used for completing IO operations on disk.
 pub struct StorageBackend {
     inner: StorageBackendInner,
+    writer_tracker: ActiveWriterTracker,
 }
 
 impl StorageBackend {
+    /// Returns the set of active writers.
+    pub fn get_active_writers(&self) -> HashSet<FileKey> {
+        self.writer_tracker.get_active()
+    }
+
     /// Creates a new buffered IO backend with a given config.
     pub async fn create_buffered_io(config: BufferedIoConfig) -> io::Result<Self> {
         let backend = buffered::BufferedIoBackend::create(config)?;
         Ok(Self {
             inner: StorageBackendInner::BufferedIo(backend),
+            writer_tracker: ActiveWriterTracker::default(),
         })
     }
 
@@ -45,6 +55,7 @@ impl StorageBackend {
         let backend = directio::DirectIoBackend::create(config).await?;
         Ok(Self {
             inner: StorageBackendInner::DirectIo(backend),
+            writer_tracker: ActiveWriterTracker::default(),
         })
     }
 
@@ -56,16 +67,17 @@ impl StorageBackend {
         file_key: FileKey,
         path: &Path,
     ) -> io::Result<FileWriter> {
+        let tracker = self.writer_tracker.create_tracker(file_key);
         match &self.inner {
             StorageBackendInner::BufferedIo(backend) => backend
                 .open_writer(file_key, path)
                 .await
-                .map(|writer| FileWriter::from_buffered(file_key, writer)),
+                .map(|writer| FileWriter::from_buffered(file_key, writer, tracker)),
             #[cfg(feature = "direct-io-backend")]
             StorageBackendInner::DirectIo(backend) => backend
                 .open_writer(file_key, path)
                 .await
-                .map(|writer| FileWriter::from_direct(file_key, writer)),
+                .map(|writer| FileWriter::from_direct(file_key, writer, tracker)),
         }
     }
 

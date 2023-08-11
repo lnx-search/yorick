@@ -24,6 +24,7 @@ thiserror = "1"
 exponential-backoff = "1.2.0"
 smallvec = "1.10.0"
 cityhasher = "0.1.0"
+humansize = "2.1.3"
 
 rkyv = { version = "0.7.42", features = ["strict", "archive_le"] }
 tokio = { version = "1", default-features = false, features = ["sync", "fs", "io-util", "time", "rt"] }

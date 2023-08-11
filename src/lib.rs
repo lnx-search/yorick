@@ -9,16 +9,17 @@ use std::time::Instant;
 use rkyv::{Archive, Deserialize, Serialize};
 use tokio::io;
 
+use crate::compaction::{BlobCompactor, CompactorController};
 use crate::index::IndexBackgroundSnapshotter;
 use crate::read::{ReadContext, ReaderCache};
-use crate::tools::KillSwitch;
-use crate::write::{WriteContext, WriterContext, WriterSizeController};
+use crate::tools::{KillSwitch, LockingCounter};
+use crate::write::{ActiveWriter, WriteContext, WriterSizeController};
 
 mod backends;
 mod cleanup;
+mod compaction;
 mod index;
 mod init;
-mod merge;
 mod read;
 mod tools;
 mod write;
@@ -26,12 +27,17 @@ mod write;
 #[cfg(feature = "direct-io-backend")]
 pub use self::backends::DirectIoConfig;
 pub use self::backends::{BufferedIoConfig, FileReader, FileWriter, StorageBackend};
+pub use self::compaction::{
+    CompactionPolicy,
+    DefaultCompactionPolicy,
+    NoCompactionPolicy,
+};
 pub use self::index::{BlobIndex, BlobInfo};
 
 /// The unique ID for a given blob.
 pub type BlobId = u64;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// The configuration options for the storage service.
 pub struct StorageServiceConfig {
     /// The base directory where all files are stored.
@@ -46,82 +52,138 @@ pub struct StorageServiceConfig {
     pub max_file_size: u64,
 }
 
+impl StorageServiceConfig {
+    /// The location of the yorick data files.
+    pub(crate) fn data_path(&self) -> PathBuf {
+        get_data_path(&self.base_path)
+    }
+
+    /// The location of the index snapshot files.
+    pub(crate) fn index_snapshot_path(&self) -> PathBuf {
+        get_index_snapshot_path(&self.base_path)
+    }
+
+    /// Ensures all the directories are created for the given config.
+    pub(crate) async fn ensure_directories_exist(&self) -> io::Result<()> {
+        tokio::fs::create_dir_all(self.data_path()).await?;
+        tokio::fs::create_dir_all(self.index_snapshot_path()).await?;
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 /// The primary storage service that controls reading and writing data.
 pub struct YorickStorageService {
     /// The active IO backend.
     backend: StorageBackend,
-    /// The writer context.
-    writer_context: WriterContext,
+    /// The active writer context.
+    active_writer: ActiveWriter,
     /// The actor which controls automatic file rollover's kill switch.
     size_controller_switch: KillSwitch,
     /// The actor which creates snapshots of the in memory index.
     index_snapshot_switch: KillSwitch,
-    /// The live blob lookup table/index.
-    blob_index: BlobIndex,
-    /// The live reader cache.
-    readers: ReaderCache,
+    /// The live reader context.
+    readers: ReadContext,
+    /// The controller for managing the current compactor.
+    compaction_controller: CompactorController,
 }
 
 impl YorickStorageService {
-    #[instrument("storage-service-create", skip(backend))]
     /// Creates a new storage service using a given backend.
     pub async fn create(
         backend: StorageBackend,
         config: StorageServiceConfig,
     ) -> io::Result<Self> {
+        Self::create_with_compaction(backend, config, NoCompactionPolicy).await
+    }
+
+    #[instrument("storage-service-create", skip(backend, compaction_policy))]
+    /// Creates a new storage service using a given backend and compaction policy.
+    pub async fn create_with_compaction(
+        backend: StorageBackend,
+        config: StorageServiceConfig,
+        compaction_policy: impl CompactionPolicy,
+    ) -> io::Result<Self> {
         info!("Creating storage service");
 
         let start = Instant::now();
-        let data_directory = get_data_path(&config.base_path);
-        let indexes_directory = get_index_path(&config.base_path);
+        let data_directory = config.data_path();
+        let indexes_directory = config.index_snapshot_path();
 
-        tokio::fs::create_dir_all(&data_directory).await?;
-        tokio::fs::create_dir_all(&indexes_directory).await?;
+        // Make sure our directory is setup.
+        config.ensure_directories_exist().await?;
 
+        // Prune any files we dont need.
         cleanup::cleanup_empty_files(&data_directory).await?;
+
         let next_file_key = init::load_next_file_key(&data_directory).await?;
         let current_snapshot_id =
             init::load_next_snapshot_id(&indexes_directory).await?;
         let blob_index =
             init::load_blob_index(&indexes_directory, &data_directory).await?;
 
-        // Setup a new writer.
-        let writer_path = get_data_file(&data_directory, next_file_key);
-        let writer = backend.open_writer(next_file_key, &writer_path).await?;
-        let writer_context = WriterContext::new(writer);
+        // Setup the monotonic file key counter
+        let file_key_counter = LockingCounter::new(next_file_key.0);
+        let new_file_key = FileKey(file_key_counter.inc());
+
+        // Create a new active writer.
+        let writer_path = get_data_file(&data_directory, new_file_key);
+        let writer = backend.open_writer(new_file_key, &writer_path).await?;
+        let active_writer = ActiveWriter::new(writer);
 
         let size_controller_switch = WriterSizeController::spawn(
             config.max_file_size,
-            next_file_key.0 + 1,
+            file_key_counter.clone(),
             data_directory.clone(),
             backend.clone(),
-            writer_context.clone(),
+            active_writer.clone(),
         )
         .await;
 
+        // Memory index snapshotter
         let index_snapshot_switch = IndexBackgroundSnapshotter::spawn(
             current_snapshot_id,
             &indexes_directory,
             blob_index.clone(),
         );
 
-        let readers = ReaderCache::new(backend.clone(), data_directory);
+        // Create the reader cache.
+        let reader_cache = ReaderCache::new(backend.clone(), data_directory);
+        let readers = ReadContext::new(blob_index.clone(), reader_cache);
+
+        // Start the compaction actor with the given policy.
+        let compaction_controller = BlobCompactor::spawn(
+            Box::new(compaction_policy),
+            file_key_counter.clone(),
+            readers.clone(),
+            config,
+            backend.clone(),
+        )
+        .await;
 
         info!(elapsed = ?start.elapsed(), "Service has been setup");
 
         Ok(Self {
             backend,
-            writer_context,
+            active_writer,
             size_controller_switch,
             index_snapshot_switch,
-            blob_index,
             readers,
+            compaction_controller,
         })
+    }
+
+    /// Starts a new compaction cycle running.
+    ///
+    /// This method will complete once the trigger has been sent,
+    /// but this does not mean the compaction has been completed yet.
+    pub async fn run_compaction(&self) {
+        self.compaction_controller.compact().await;
     }
 
     /// Shuts down the manager.
     pub fn shutdown(&self) -> io::Result<()> {
+        self.compaction_controller.kill();
         self.size_controller_switch.set_killed();
         self.index_snapshot_switch.set_killed();
         self.backend.wait_shutdown()
@@ -129,16 +191,12 @@ impl YorickStorageService {
 
     /// Creates a new write context for writing blobs of data.
     pub fn create_write_ctx(&self) -> WriteContext {
-        WriteContext::new(
-            self.blob_index.clone(),
-            self.readers.clone(),
-            self.writer_context.get(),
-        )
+        WriteContext::new(self.readers.clone(), self.active_writer.get())
     }
 
     /// Creates a read context for reading blobs.
     pub fn create_read_ctx(&self) -> ReadContext {
-        ReadContext::new(self.blob_index.clone(), self.readers.clone())
+        self.readers.clone()
     }
 }
 
@@ -312,7 +370,7 @@ fn get_data_path(path: &Path) -> PathBuf {
 }
 
 /// Returns the path of the index snapshot directory given a base path.
-fn get_index_path(path: &Path) -> PathBuf {
+fn get_index_snapshot_path(path: &Path) -> PathBuf {
     path.join("index-snapshots")
 }
 

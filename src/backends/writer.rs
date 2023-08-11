@@ -6,6 +6,7 @@ use std::sync::Arc;
 use crate::backends::buffered;
 #[cfg(feature = "direct-io-backend")]
 use crate::backends::directio;
+use crate::tools::TrackingRef;
 use crate::{BlobHeader, FileKey, WriteId};
 
 #[derive(Clone)]
@@ -24,6 +25,8 @@ pub struct FileWriter {
     ///
     /// Some bytes may still be in-flight.
     num_bytes: Arc<AtomicU64>,
+    /// The tracker for marking when the writer is closed.
+    _tracker: TrackingRef,
 }
 
 impl FileWriter {
@@ -116,12 +119,17 @@ impl FileWriter {
 }
 
 impl FileWriter {
-    pub(crate) fn from_buffered(file_key: FileKey, writer: buffered::Writer) -> Self {
+    pub(crate) fn from_buffered(
+        file_key: FileKey,
+        writer: buffered::Writer,
+        tracker: TrackingRef,
+    ) -> Self {
         Self {
             file_key,
             inner: FileWriterInner::Buffered(writer),
             closed: Arc::new(AtomicBool::new(false)),
             num_bytes: Arc::new(AtomicU64::new(0)),
+            _tracker: tracker,
         }
     }
 }
@@ -131,12 +139,14 @@ impl FileWriter {
     pub(crate) fn from_direct(
         file_key: FileKey,
         writer: directio::WriterMailbox,
+        tracker: TrackingRef,
     ) -> Self {
         Self {
             file_key,
             inner: FileWriterInner::DirectIo(writer),
             closed: Arc::new(AtomicBool::new(false)),
             num_bytes: Arc::new(AtomicU64::new(0)),
+            _tracker: tracker,
         }
     }
 }
