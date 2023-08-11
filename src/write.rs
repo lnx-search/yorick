@@ -60,7 +60,12 @@ impl WriteContext {
         );
 
         let checksum = crc32fast::hash(buf);
-        let header = BlobHeader::new(id, buf.len() as u32, group_id, checksum);
+        let header = BlobHeader::new(
+            id,
+            buf.len() as u32,
+            group_id,
+            checksum,
+        );
         self.write_header_and_data(header, buffer).await
     }
 
@@ -73,7 +78,6 @@ impl WriteContext {
     where
         B: AsRef<[u8]> + Send + 'static,
     {
-        let blob_id = header.blob_id;
         let len = header.blob_length();
         let write_id = self.file_writer.write_blob(header, buffer).await?;
 
@@ -81,10 +85,11 @@ impl WriteContext {
             file_key: write_id.file_key,
             start_pos: write_id.end_pos - len as u64,
             len: len as u32,
-            group_id,
-            checksum,
+            group_id: header.group_id,
+            checksum: header.checksum,
+            merge_counter: header.merge_counter,
         };
-        self.queued_changes.push((blob_id, info));
+        self.queued_changes.push((header.blob_id, info));
 
         self.did_op = true;
 

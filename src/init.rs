@@ -141,6 +141,7 @@ where
             len: header.total_length() as u32,
             group_id: header.group_id,
             checksum: header.checksum,
+            merge_counter: header.merge_counter,
         };
 
         (header_callback)(header.blob_id, info);

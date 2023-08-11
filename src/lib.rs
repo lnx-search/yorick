@@ -281,12 +281,14 @@ impl BlobHeader {
         + mem::size_of::<u64>()
         + mem::size_of::<u32>()
         + mem::size_of::<u64>()
+        + mem::size_of::<u32>()
         + mem::size_of::<u32>();
 
     /// The static size of the header on disk.
     const SIZE_INFO_ONLY: usize = mem::size_of::<u64>()
         + mem::size_of::<u32>()
         + mem::size_of::<u64>()
+        + mem::size_of::<u32>()
         + mem::size_of::<u32>();
 
     /// The magic bytes which signals to the handlers that the data after it might be a header.
@@ -294,14 +296,22 @@ impl BlobHeader {
     /// This is only used for recovering if corrupted data is discovered.
     const MAGIC_BYTES: [u8; 2] = [1, 1];
 
+    #[inline]
     /// Creates a new blob header.
     pub fn new(blob_id: u64, blob_length: u32, group_id: u64, checksum: u32) -> Self {
+        Self::new_with_merges(blob_id, blob_length, group_id, checksum, 0)
+    }
+
+    #[inline]
+    /// Creates a new blob header with a given number of merges.
+    pub fn new_with_merges(blob_id: u64, blob_length: u32, group_id: u64, checksum: u32, merge_counter: u32) -> Self {
         let mut buffer = [0; Self::SIZE_INFO_ONLY];
 
         buffer[0..8].copy_from_slice(&blob_id.to_le_bytes());
         buffer[8..12].copy_from_slice(&blob_length.to_le_bytes());
         buffer[12..20].copy_from_slice(&group_id.to_le_bytes());
         buffer[20..24].copy_from_slice(&checksum.to_le_bytes());
+        buffer[24..28].copy_from_slice(&merge_counter.to_le_bytes());
 
         let blob_header_checksum = tools::stable_hash(&buffer);
 
@@ -311,6 +321,7 @@ impl BlobHeader {
             blob_length,
             group_id,
             checksum,
+            merge_counter,
         }
     }
 
@@ -324,6 +335,11 @@ impl BlobHeader {
         self.blob_length as usize
     }
 
+    /// Returns the number of the merges the blob has been through.
+    pub fn merge_counter(&self) -> usize {
+        self.merge_counter as usize
+    }
+
     /// Returns the header as bytes.
     pub fn as_bytes(&self) -> [u8; Self::SIZE] {
         let mut buffer = [0; Self::SIZE];
@@ -333,6 +349,7 @@ impl BlobHeader {
         buffer[14..18].copy_from_slice(&self.blob_length.to_le_bytes());
         buffer[18..26].copy_from_slice(&self.group_id.to_le_bytes());
         buffer[26..30].copy_from_slice(&self.checksum.to_le_bytes());
+        buffer[30..34].copy_from_slice(&self.merge_counter.to_le_bytes());
         buffer
     }
 
@@ -357,6 +374,7 @@ impl BlobHeader {
             blob_length: u32::from_le_bytes(buffer[14..18].try_into().unwrap()),
             group_id: u64::from_le_bytes(buffer[18..26].try_into().unwrap()),
             checksum: u32::from_le_bytes(buffer[26..30].try_into().unwrap()),
+            merge_counter: u32::from_le_bytes(buffer[30..34].try_into().unwrap()),
         })
     }
 }

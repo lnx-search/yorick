@@ -50,6 +50,7 @@ impl Default for BlobIndex {
 }
 
 impl BlobIndex {
+    #[cfg(test)]
     /// Inserts a single blob ID into the index with some info.
     pub(crate) fn insert_many(
         &self,
@@ -235,6 +236,8 @@ pub struct BlobInfo {
     pub(crate) group_id: u64,
     /// The checksum of the blob data.
     pub(crate) checksum: u32,
+    /// The number of merges the blob has gone through.
+    pub(crate) merge_counter: u32,
 }
 
 impl BlobInfo {
@@ -267,6 +270,13 @@ impl BlobInfo {
     pub fn group_id(&self) -> u64 {
         self.group_id
     }
+
+    #[inline]
+    /// Returns the number of merges the blob has been through
+    pub fn merge_counter(&self) -> usize {
+        self.merge_counter as usize
+    }
+
 
     /// Checks if the blob was written before the given write ID.
     pub fn is_before(&self, write_id: WriteId) -> bool {
@@ -450,6 +460,7 @@ mod tests {
                     len: 3,
                     group_id: 0,
                     checksum: 0,
+                    merge_counter: 0,
                 },
             ),
             (
@@ -460,6 +471,7 @@ mod tests {
                     len: 3,
                     group_id: 0,
                     checksum: 0,
+                    merge_counter: 0,
                 },
             ),
             (
@@ -470,6 +482,7 @@ mod tests {
                     len: 3,
                     group_id: 0,
                     checksum: 0,
+                    merge_counter: 0,
                 },
             ),
         ]);
@@ -499,6 +512,7 @@ mod tests {
                     len: 3,
                     group_id: 0,
                     checksum: 0,
+                    merge_counter: 0,
                 },
             ),
             (
@@ -509,6 +523,7 @@ mod tests {
                     len: 3,
                     group_id: 0,
                     checksum: 0,
+                    merge_counter: 0,
                 },
             ),
             (
@@ -519,6 +534,7 @@ mod tests {
                     len: 3,
                     group_id: 0,
                     checksum: 0,
+                    merge_counter: 0,
                 },
             ),
         ]);

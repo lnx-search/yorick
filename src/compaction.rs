@@ -520,11 +520,12 @@ async fn copy_blob_data_chunk(
         let buffer =
             fetch_and_check_against_policy(prefetch, blob, &reader, &policy).await?;
 
-        let header = BlobHeader::new(
+        let header = BlobHeader::new_with_merges(
             blob.id,
             blob.info.len,
             blob.info.group_id,
             blob.info.checksum,
+            blob.info.merge_counter + 1,
         );
 
         tx.send((header, buffer)).await.map_err(|_| {
