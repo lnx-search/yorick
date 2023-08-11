@@ -270,6 +270,8 @@ pub struct BlobHeader {
     pub group_id: u64,
     /// A crc32 checksum of the blob.
     pub checksum: u32,
+    /// The merge counter AKA number of merges this blob has been through.
+    pub merge_counter: u32,
 }
 
 impl BlobHeader {

@@ -1,21 +1,21 @@
 use std::io;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ahash::{HashMap, HashMapExt, HashSet};
-use tokio::task::JoinSet;
 
 use crate::backends::ReadBuffer;
 use crate::read::{ReadContext, ReaderCache};
 use crate::tools::LockingCounter;
+use crate::write::WriteContext;
 use crate::{
     get_data_file,
     BlobHeader,
     BlobId,
     BlobInfo,
     FileKey,
-    FileWriter,
     StorageBackend,
     StorageServiceConfig,
 };
@@ -290,69 +290,66 @@ impl BlobCompactor {
     async fn execute_plan(&mut self, plan: MergePlan) -> io::Result<()> {
         let file_key = FileKey(self.file_key_counter.inc());
         let data_path = self.config.data_path();
-        let files = plan.file_keys;
 
         let writer_path = get_data_file(&data_path, file_key);
         let writer = self.backend.open_writer(file_key, &writer_path).await?;
+        let write_context = WriteContext::new(self.reader.clone(), writer);
 
-        let res = self
-            .copy_blobs_to_writer(writer.clone(), plan.copy_blobs)
-            .await;
-
-        writer.close().await?;
-
-        let can_delete_files = res?;
-
-        if !can_delete_files {
-            return Ok(());
-        }
-
-        info!(num_files = files.len(), "Removing files");
-
-        Ok(())
+        self.copy_blobs_to_writer(write_context, plan.copy_blobs)
+            .await
     }
 
     /// Copies a set of blob data to a file writer.
     async fn copy_blobs_to_writer(
         &mut self,
-        writer: FileWriter,
+        mut writer: WriteContext,
         blobs: Vec<BlobMetadata>,
-    ) -> io::Result<bool> {
+    ) -> io::Result<()> {
         let config = self.policy.get_config();
         let prefetch = config.needs_data_for_delete;
 
-        let mut join_set = JoinSet::new();
+        let (tx, mut rx) = tachyonix::channel(config.read_concurrency * 2);
         for chunk in blobs.chunks(config.read_concurrency) {
             let chunk = chunk.to_vec();
 
-            let writer = writer.clone();
             let reader = self.reader.cache();
             let policy = self.policy.clone();
 
-            join_set.spawn(copy_blob_data_chunk(
-                prefetch, chunk, writer, reader, policy,
+            tokio::spawn(copy_blob_data_chunk(
+                prefetch,
+                chunk,
+                reader,
+                policy,
+                tx.clone(),
             ));
         }
+        drop(tx);
 
-        let start = Instant::now();
-        let mut can_delete_files = true;
-        while let Some(res) = join_set.join_next().await {
-            match res {
-                Ok(Err(e)) => {
-                    error!(error = ?e, "Failed to complete chunk read");
-                    can_delete_files = false;
+        while let Ok((header, maybe_buffer)) = rx.recv().await {
+            match maybe_buffer {
+                None => writer.mark_delete(header.blob_id),
+                Some(buffer) => {
+                    let blob_id = header.blob_id;
+                    let res = writer.write_header_and_data(header, buffer).await;
+
+                    if let Err(e) = res {
+                        error!(error = ?e, blob_id = blob_id, "Failed to write blob");
+                        return Err(e);
+                    }
                 },
-                Err(_) => {
-                    can_delete_files = false;
-                },
-                _ => {},
             }
         }
-        info!(elapsed = ?start.elapsed(), "Blob copy complete");
 
-        Ok(can_delete_files)
+        writer.commit().await
     }
 
+    /// Produces a set of buckets which can be used for compaction.
+    ///
+    /// This works by first filtering out any blobs which are part of a file that is
+    /// newer than the given file key, then grouping the blobs by file_id and group_id.
+    ///
+    /// This lets us improve access patterns on the file cache and file in general by
+    /// grouping data which is apart of the same 'group' of blobs.
     fn get_merge_buckets(
         &self,
         before: FileKey,
@@ -406,8 +403,6 @@ fn get_merge_plans(target_size: u64, buckets: &[MergeBucket]) -> Vec<MergePlan> 
 #[derive(Debug)]
 /// A planned merge operation of one or more files.
 struct MergePlan {
-    /// The files involved in the plan
-    file_keys: Vec<FileKey>,
     /// The blobs to copy into a new file.
     copy_blobs: Vec<BlobMetadata>,
 }
@@ -513,32 +508,37 @@ fn clean_dead_files(
     Ok(num_bytes_cleaned)
 }
 
+/// Copies a chunk of blobs to the given writer.
 async fn copy_blob_data_chunk(
     prefetch: bool,
     chunk: Vec<BlobMetadata>,
-    writer: FileWriter,
     reader: ReaderCache,
     policy: Arc<dyn CompactionPolicy>,
+    tx: tachyonix::Sender<(BlobHeader, Option<ReadBuffer>)>,
 ) -> io::Result<()> {
     for blob in chunk {
         let buffer =
             fetch_and_check_against_policy(prefetch, blob, &reader, &policy).await?;
 
-        if let Some(buffer) = buffer {
-            let header = BlobHeader::new(
-                blob.id,
-                blob.info.len,
-                blob.info.group_id,
-                blob.info.checksum,
-            );
+        let header = BlobHeader::new(
+            blob.id,
+            blob.info.len,
+            blob.info.group_id,
+            blob.info.checksum,
+        );
 
-            writer.write_blob(header, buffer).await?;
-        }
+        tx.send((header, buffer)).await.map_err(|_| {
+            io::Error::new(ErrorKind::Other, "Lost contact with receiver in blob copy")
+        })?;
     }
 
     Ok(())
 }
 
+/// Reads the blob located at the position and returns it.
+///
+/// This method will check with the compaction policy if it can
+/// safely delete the blob or not.
 async fn fetch_and_check_against_policy(
     prefetch: bool,
     blob: BlobMetadata,

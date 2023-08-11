@@ -26,6 +26,7 @@ pub struct WriteContext {
     read_context: ReadContext,
     file_writer: FileWriter,
     queued_changes: SmallVec<[(BlobId, BlobInfo); 1]>,
+    removals_changes: Vec<BlobId>,
 }
 
 impl WriteContext {
@@ -35,6 +36,7 @@ impl WriteContext {
             read_context: reader,
             file_writer: writer,
             queued_changes: SmallVec::new(),
+            removals_changes: Vec::new(),
         }
     }
 
@@ -59,21 +61,41 @@ impl WriteContext {
 
         let checksum = crc32fast::hash(buf);
         let header = BlobHeader::new(id, buf.len() as u32, group_id, checksum);
-        let len = header.total_length() as u32;
+        self.write_header_and_data(header, buffer).await
+    }
+
+    /// Writes a header and blob to the storage service.
+    pub(crate) async fn write_header_and_data<B>(
+        &mut self,
+        header: BlobHeader,
+        buffer: B,
+    ) -> io::Result<WriteId>
+    where
+        B: AsRef<[u8]> + Send + 'static,
+    {
+        let blob_id = header.blob_id;
+        let len = header.blob_length();
         let write_id = self.file_writer.write_blob(header, buffer).await?;
 
         let info = BlobInfo {
             file_key: write_id.file_key,
             start_pos: write_id.end_pos - len as u64,
-            len,
+            len: len as u32,
             group_id,
             checksum,
         };
-        self.queued_changes.push((id, info));
+        self.queued_changes.push((blob_id, info));
 
         self.did_op = true;
 
         Ok(write_id)
+    }
+
+    /// Queues a delete operation.
+    ///
+    /// This is INTERNAL USE ONLY.
+    pub(crate) fn mark_delete(&mut self, blob_id: BlobId) {
+        self.removals_changes.push(blob_id);
     }
 
     #[instrument("commit", skip(self))]
@@ -86,9 +108,19 @@ impl WriteContext {
             let file_key = self.file_writer.file_key();
             // Reflect the changes to readers.
             self.read_context.cache().forget(file_key);
-            self.read_context
-                .blob_index()
-                .insert_many(self.queued_changes);
+
+            {
+                let writer = self.read_context.blob_index().writer();
+                let mut lock = writer.lock();
+                for (blob_id, info) in self.queued_changes {
+                    lock.update(blob_id, info);
+                }
+                for blob_id in self.removals_changes {
+                    lock.remove_entry(blob_id);
+                }
+                lock.publish();
+            }
+
             self.did_op = false;
         }
         Ok(())
