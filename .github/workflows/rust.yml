@@ -32,9 +32,9 @@ jobs:
         run: cargo install cargo-hack
       - uses: Swatinem/rust-cache@v1
       - name: Check features
-        run: cargo hack check --all --ignore-private --each-feature --no-dev-deps
+        run: cargo hack check --all --ignore-private --each-feature --no-dev-deps --skip rkyv_size_32,rkyv_size_64
       - name: Check all targets
-        run: cargo check --all --all-targets --all-features
+        run: cargo check --all --all-targets --features direct-io-backend --features test-utils
 
   build:
     runs-on: ${{ matrix.os }}
@@ -49,7 +49,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Run main tests
-        run: cargo nextest run --workspace --retries 3
+        run: cargo nextest run --workspace --features direct-io-backend --features test-utils --retries 3
 
       - name: Run doc tests
-        run: cargo test --doc --workspace
+        run: cargo test --doc --workspace --features direct-io-backend --features test-utils

@@ -52,4 +52,4 @@ jobs:
         uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --workspace --all-features --tests --examples --bins -- -Dclippy::todo
+          args: --workspace --features direct-io-backend --features test-utils --tests --examples --bins -- -Dclippy::todo
