@@ -24,6 +24,10 @@ async fn main() -> Result<()> {
     std::env::set_var("RUST_LOG", "debug");
     tracing_subscriber::fmt::init();
 
+    // If you're on a KVM machine, you may want to reduce concurrency
+    // to `5` (dedicated hardware probably wants to be closer to `25-50`)
+    // KVM in particular just... Dies if direct IO is used too aggressively.
+
     let buffered_config = BufferedIoConfig::default();
     let buffered_backend = StorageBackend::create_buffered_io(buffered_config).await?;
     test_write_perf(buffered_backend, 5).await?;
