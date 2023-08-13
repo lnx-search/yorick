@@ -49,17 +49,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - if: matrix.os != 'ubuntu-latest'
-        name: Run main tests
+        name: Run main tests wo/io_uring
         run: cargo nextest run --workspace --features test-utils --retries 3
 
       - if: matrix.os != 'ubuntu-latest'
-        name: Run doc tests
-        run: cargo test --doc --workspace --features direct-io-backend --features test-utils
+        name: Run doc tests wo/io_uring
+        run: cargo test --doc --workspace --features test-utils
 
       - if: matrix.os == 'ubuntu-latest'
-        name: Run main tests
+        name: Run main tests w/io_uring
         run: cargo nextest run --workspace --features direct-io-backend --features test-utils --retries 3
 
       - if: matrix.os == 'ubuntu-latest'
-        name: Run doc tests
+        name: Run doc tests w/io_uring
         run: cargo test --doc --workspace --features direct-io-backend --features test-utils
