@@ -50,14 +50,14 @@ impl WriterMailbox {
     pub async fn close(&self) -> io::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::Close { tx }).await?;
-        rx.await.map_err(|_| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error("close-op"))?
     }
 
     /// Flushes the buffers of the writer to disk, returning the position in bytes.
     pub async fn sync(&self) -> io::Result<u64> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::Sync { tx }).await?;
-        rx.await.map_err(|_| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error("sync-op"))?
     }
 
     /// Writes a given blob to the currently open file.
@@ -68,11 +68,14 @@ impl WriterMailbox {
     ) -> io::Result<WriteId> {
         let (tx, rx) = oneshot::channel();
         self.send_op(IoOp::WriteBlob { header, buffer, tx }).await?;
-        rx.await.map_err(|_| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error("write-op"))?
     }
 
     async fn send_op(&self, op: IoOp) -> io::Result<()> {
-        self.tx.send(op).await.map_err(|_| lost_contact_error())
+        self.tx
+            .send(op)
+            .await
+            .map_err(|_| lost_contact_error("write-op-tx"))
     }
 }
 

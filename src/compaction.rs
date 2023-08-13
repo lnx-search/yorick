@@ -204,6 +204,7 @@ impl BlobCompactor {
             let start = Instant::now();
             match self.run_compaction().await {
                 Ok(num_bytes) => {
+                    // TODO: Adjust this number so it's actually correct.
                     info!(
                         reclaimed_bytes = num_bytes,
                         reclaimed_bytes_pretty = %humansize::format_size(num_bytes, humansize::DECIMAL),
@@ -254,14 +255,13 @@ impl BlobCompactor {
         .await
         .expect("Spawn background thread")?;
 
-        let merge_buckets = self.get_merge_buckets(file_key, &active_writers);
-
         info!(
             num_files = files.len(),
             "{} files met compaction criteria",
             files.len()
         );
 
+        let merge_buckets = self.get_merge_buckets(file_key, &active_writers);
         let plans = get_merge_plans(self.config.max_file_size, &merge_buckets);
         info!(
             num_plans = plans.len(),
@@ -276,9 +276,10 @@ impl BlobCompactor {
 
         let mut bytes_reclaimed = 0;
         {
+            let used_files = self.get_files_in_use(file_key);
             let path = self.config.data_path();
             bytes_reclaimed += tokio::task::spawn_blocking(move || {
-                clean_dead_files(&path, &files, &merge_buckets)
+                clean_dead_files(&path, &files, used_files)
             })
             .await
             .expect("Spawn background thread")?;
@@ -376,7 +377,6 @@ impl BlobCompactor {
                 .entry((info.file_key, info.group_id))
                 .or_insert_with(|| MergeBucket {
                     group_id: info.group_id,
-                    file_key: info.file_key,
                     total_size_approx: 0,
                     blobs: Vec::with_capacity(1),
                 });
@@ -393,6 +393,25 @@ impl BlobCompactor {
         buckets.sort_by_key(|bucket| (bucket.group_id, bucket.total_size_approx));
 
         buckets
+    }
+
+    fn get_files_in_use(&self, before: FileKey) -> BTreeSet<FileKey> {
+        self.reader
+            .blob_index()
+            .reader()
+            .enter()
+            .iter()
+            .flatten()
+            .filter_map(|(_, info)| {
+                let info = info.get_one().unwrap();
+
+                if info.file_key < before {
+                    Some(info.file_key)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -505,8 +524,6 @@ struct MergePlan {
 struct MergeBucket {
     /// The group ID of the bucket.
     group_id: u64,
-    /// The file key of the bucket.
-    file_key: FileKey,
     /// The approximate size in bytes
     total_size_approx: u64,
     /// The blobs that are apart of that file.
@@ -551,6 +568,12 @@ fn get_current_file_sizes_before(
             },
         };
 
+        println!(
+            "key: {:?}, file_key < newest_file_key: {}, contains: {}",
+            file_key,
+            file_key < newest_file_key,
+            active_writers.contains(&file_key)
+        );
         if file_key < newest_file_key && !active_writers.contains(&file_key) {
             files.push((file_key, metadata.len()));
         }
@@ -559,18 +582,18 @@ fn get_current_file_sizes_before(
     Ok(files)
 }
 
-#[instrument("dead-file-gc", skip(files, buckets))]
+#[instrument("dead-file-gc", skip(files, files_in_use))]
 /// Removes any files which contain no data currently in the index.
 fn clean_dead_files(
     data_path: &Path,
     files: &[(FileKey, u64)],
-    buckets: &[MergeBucket],
+    files_in_use: BTreeSet<FileKey>,
 ) -> io::Result<u64> {
     let mut lookup = HashSet::from_iter(files.iter().map(|v| v.0));
 
     // Remove any files which exist in our index.
-    for bucket in buckets {
-        lookup.remove(&bucket.file_key);
+    for file_key in files_in_use {
+        lookup.remove(&file_key);
     }
 
     let mut num_bytes_cleaned = 0;
@@ -616,7 +639,7 @@ async fn copy_blob_data_chunk(
 
         let header = BlobHeader::new_with_merges(
             blob.id,
-            blob.info.total_length,
+            blob.info.blob_length(),
             blob.info.group_id,
             blob.info.checksum,
             blob.info.merge_counter + 1,
@@ -671,7 +694,6 @@ mod tests {
     fn test_merge_policy_basic_single_plan() {
         let blobs = vec![MergeBucket {
             group_id: 0,
-            file_key: FileKey(1),
             total_size_approx: 50,
             blobs: vec![
                 BlobMetadata {
@@ -749,7 +771,6 @@ mod tests {
     fn test_merge_policy_basic_larger_plans_odd_behaviour() {
         let blobs = vec![MergeBucket {
             group_id: 0,
-            file_key: FileKey(1),
             total_size_approx: 50,
             blobs: vec![
                 BlobMetadata {
@@ -820,7 +841,6 @@ mod tests {
         let blobs = vec![
             MergeBucket {
                 group_id: 0,
-                file_key: FileKey(1),
                 total_size_approx: 30,
                 blobs: vec![
                     BlobMetadata {
@@ -843,7 +863,6 @@ mod tests {
             },
             MergeBucket {
                 group_id: 0,
-                file_key: FileKey(1),
                 total_size_approx: 20,
                 blobs: vec![BlobMetadata {
                     id: 3,
@@ -856,7 +875,6 @@ mod tests {
             },
             MergeBucket {
                 group_id: 0,
-                file_key: FileKey(1),
                 total_size_approx: 20,
                 blobs: vec![BlobMetadata {
                     id: 4,
@@ -926,7 +944,6 @@ mod tests {
         let blobs = vec![
             MergeBucket {
                 group_id: 0,
-                file_key: FileKey(1),
                 total_size_approx: 18,
                 blobs: vec![BlobMetadata {
                     id: 1,
@@ -940,7 +957,6 @@ mod tests {
             },
             MergeBucket {
                 group_id: 1,
-                file_key: FileKey(1),
                 total_size_approx: 20,
                 blobs: vec![BlobMetadata {
                     id: 3,
@@ -954,7 +970,6 @@ mod tests {
             },
             MergeBucket {
                 group_id: 0,
-                file_key: FileKey(2),
                 total_size_approx: 20,
                 blobs: vec![BlobMetadata {
                     id: 4,

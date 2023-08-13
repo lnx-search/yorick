@@ -38,6 +38,7 @@ evmap = { git = "https://github.com/lnx-search/evmap.git", rev = "e470ff3" }
 [dev-dependencies]
 tokio = { version = "1", default-features = false, features = ["full"] }
 test-utils = { path = "test-utils" }
+anyhow = "1"
 
 [features]
 default = ["rkyv_size_32", "compress-index"]
@@ -54,6 +55,8 @@ rkyv_size_32 = ["rkyv/size_32"]
 # Enables `rkyv` `size_64` feature, treating `usize` values as 64 bit ints.
 rkyv_size_64 = ["rkyv/size_64"]
 compress-index = ["lz4_flex"]
+# Enables some extra methods for testing.
+test-utils = []
 
 [workspace]
 members = [

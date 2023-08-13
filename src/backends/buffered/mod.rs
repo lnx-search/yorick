@@ -21,6 +21,14 @@ pub struct BufferedIoConfig {
     pub io_threads: usize,
 }
 
+impl BufferedIoConfig {
+    #[cfg(feature = "test-utils")]
+    /// Creates a new config for testing.
+    pub fn default_for_test() -> Self {
+        Self { io_threads: 1 }
+    }
+}
+
 impl Default for BufferedIoConfig {
     fn default() -> Self {
         Self {

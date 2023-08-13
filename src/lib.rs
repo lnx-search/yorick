@@ -4,6 +4,8 @@ extern crate tracing;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 use rkyv::{Archive, Deserialize, Serialize};
@@ -54,12 +56,12 @@ pub struct StorageServiceConfig {
 
 impl StorageServiceConfig {
     /// The location of the yorick data files.
-    pub(crate) fn data_path(&self) -> PathBuf {
+    pub fn data_path(&self) -> PathBuf {
         get_data_path(&self.base_path)
     }
 
     /// The location of the index snapshot files.
-    pub(crate) fn index_snapshot_path(&self) -> PathBuf {
+    pub fn index_snapshot_path(&self) -> PathBuf {
         get_index_snapshot_path(&self.base_path)
     }
 
@@ -74,18 +76,13 @@ impl StorageServiceConfig {
 #[derive(Clone)]
 /// The primary storage service that controls reading and writing data.
 pub struct YorickStorageService {
-    /// The active IO backend.
-    backend: StorageBackend,
+    /// A hook which is triggered once all copies of the
+    /// storage service are closed.
+    shutdown_hook: Arc<ShutdownHooks>,
     /// The active writer context.
     active_writer: ActiveWriter,
-    /// The actor which controls automatic file rollover's kill switch.
-    size_controller_switch: KillSwitch,
-    /// The actor which creates snapshots of the in memory index.
-    index_snapshot_switch: KillSwitch,
     /// The live reader context.
     readers: ReadContext,
-    /// The controller for managing the current compactor.
-    compaction_controller: CompactorController,
 }
 
 impl YorickStorageService {
@@ -112,15 +109,25 @@ impl YorickStorageService {
 
         // Make sure our directory is setup.
         config.ensure_directories_exist().await?;
+        info!("Directories OK");
 
         // Prune any files we dont need.
         cleanup::cleanup_empty_files(&data_directory).await?;
+        info!("Directory cleanup OK");
 
         let next_file_key = init::load_next_file_key(&data_directory).await?;
+        info!(next_file_key = ?next_file_key, "Last known position found");
+
         let current_snapshot_id =
             init::load_next_snapshot_id(&indexes_directory).await?;
+        info!(
+            current_snapshot_id = current_snapshot_id,
+            "Found snapshot ID"
+        );
+
         let blob_index =
             init::load_blob_index(&indexes_directory, &data_directory).await?;
+        info!("Memory index re-created OK");
 
         // Setup the monotonic file key counter
         let file_key_counter = LockingCounter::new(next_file_key.0);
@@ -135,7 +142,7 @@ impl YorickStorageService {
             config.max_file_size,
             file_key_counter.clone(),
             data_directory.clone(),
-            backend.clone(),
+            backend.clone_internal(),
             active_writer.clone(),
         )
         .await;
@@ -148,7 +155,7 @@ impl YorickStorageService {
         );
 
         // Create the reader cache.
-        let reader_cache = ReaderCache::new(backend.clone(), data_directory);
+        let reader_cache = ReaderCache::new(backend.clone_internal(), data_directory);
         let readers = ReadContext::new(blob_index.clone(), reader_cache);
 
         // Start the compaction actor with the given policy.
@@ -157,19 +164,24 @@ impl YorickStorageService {
             file_key_counter.clone(),
             readers.clone(),
             config,
-            backend.clone(),
+            backend.clone_internal(),
         )
         .await;
+
+        let shutdown_hook = ShutdownHooks {
+            is_shutdown: AtomicBool::new(false),
+            backend,
+            size_controller_switch,
+            index_snapshot_switch,
+            compaction_controller,
+        };
 
         info!(elapsed = ?start.elapsed(), "Service has been setup");
 
         Ok(Self {
-            backend,
+            shutdown_hook: Arc::new(shutdown_hook),
             active_writer,
-            size_controller_switch,
-            index_snapshot_switch,
             readers,
-            compaction_controller,
         })
     }
 
@@ -177,16 +189,8 @@ impl YorickStorageService {
     ///
     /// This method will complete once the trigger has been sent,
     /// but this does not mean the compaction has been completed yet.
-    pub async fn run_compaction(&self) {
-        self.compaction_controller.compact().await;
-    }
-
-    /// Shuts down the manager.
-    pub fn shutdown(&self) -> io::Result<()> {
-        self.compaction_controller.kill();
-        self.size_controller_switch.set_killed();
-        self.index_snapshot_switch.set_killed();
-        self.backend.wait_shutdown()
+    pub async fn start_compaction(&self) {
+        self.shutdown_hook.compaction_controller.compact().await;
     }
 
     /// Creates a new write context for writing blobs of data.
@@ -197,6 +201,58 @@ impl YorickStorageService {
     /// Creates a read context for reading blobs.
     pub fn create_read_ctx(&self) -> ReadContext {
         self.readers.clone()
+    }
+
+    /// Shuts down the service.
+    ///
+    /// This does *not* close the backend.
+    pub fn shutdown(&self) -> io::Result<()> {
+        self.shutdown_hook.shutdown()
+    }
+}
+
+/// A struct for automatically triggering a shutdown when everything closes.
+///
+/// This is mostly to prevent some of the actors driven by interval timings
+/// from running forever.
+struct ShutdownHooks {
+    /// A flag to signal if the system is already shutdown.
+    is_shutdown: AtomicBool,
+    /// The active IO backend.
+    backend: StorageBackend,
+    /// The controller for managing the current compactor.
+    compaction_controller: CompactorController,
+    /// The actor which controls automatic file rollover's kill switch.
+    size_controller_switch: KillSwitch,
+    /// The actor which creates snapshots of the in memory index.
+    index_snapshot_switch: KillSwitch,
+}
+
+impl ShutdownHooks {
+    /// Shuts down the service.
+    ///
+    /// This does *not* close the backend.
+    fn shutdown(&self) -> io::Result<()> {
+        if self.is_shutdown.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+
+        self.compaction_controller.kill();
+        self.size_controller_switch.set_killed();
+        self.index_snapshot_switch.set_killed();
+        let res = self.backend.wait_shutdown();
+
+        self.is_shutdown.store(true, Ordering::Relaxed);
+
+        res
+    }
+}
+
+impl Drop for ShutdownHooks {
+    fn drop(&mut self) {
+        if let Err(e) = self.shutdown() {
+            error!(error = ?e, "Failed to complete shutdown");
+        }
     }
 }
 

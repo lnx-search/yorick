@@ -73,12 +73,11 @@ impl WriteContext {
     where
         B: AsRef<[u8]> + Send + 'static,
     {
-        let len = header.blob_length();
         let write_id = self.file_writer.write_blob(header, buffer).await?;
 
         let info = BlobInfo::using_write_id(
             write_id,
-            len as u32,
+            header.blob_length() as u32,
             header.group_id,
             header.checksum,
             header.merge_counter,

@@ -71,7 +71,6 @@ pub struct ReadResult {
     pub data: ReadBuffer,
 }
 
-#[derive(Clone)]
 /// A cache of live readers which are open.
 ///
 /// This manages opening new readers, and closing old readers
@@ -79,7 +78,17 @@ pub struct ReadResult {
 pub(crate) struct ReaderCache {
     live_readers: Arc<ArcSwap<HashMap<FileKey, FileReader>>>,
     backend: StorageBackend,
-    base_path: PathBuf,
+    base_path: Arc<PathBuf>,
+}
+
+impl Clone for ReaderCache {
+    fn clone(&self) -> Self {
+        Self {
+            live_readers: self.live_readers.clone(),
+            backend: self.backend.clone_internal(),
+            base_path: self.base_path.clone(),
+        }
+    }
 }
 
 impl ReaderCache {
@@ -87,7 +96,7 @@ impl ReaderCache {
         Self {
             live_readers: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             backend,
-            base_path,
+            base_path: Arc::new(base_path),
         }
     }
 

@@ -7,7 +7,7 @@ use yorick::{BufferedIoConfig, StorageServiceConfig, YorickStorageService};
 async fn test_buffered_io_writer_change() {
     init_logging();
 
-    let buffered = BufferedIoConfig::default();
+    let buffered = BufferedIoConfig::default_for_test();
     let backend = yorick::StorageBackend::create_buffered_io(buffered)
         .await
         .expect("Create buffered IO backend");
@@ -35,7 +35,7 @@ async fn test_direct_io_writer_change() {
 
     use yorick::DirectIoConfig;
 
-    let direct = DirectIoConfig::default();
+    let direct = DirectIoConfig::default_for_test();
     let backend = yorick::StorageBackend::create_direct_io(direct)
         .await
         .expect("Create buffered IO backend");

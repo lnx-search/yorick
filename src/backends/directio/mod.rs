@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
@@ -62,9 +63,12 @@ impl Task for TaskSelector {
     }
 }
 
-pub(super) fn lost_contact_error() -> io::Error {
-    warn!("Mailbox lost contact with actor that should be running");
-    io::Error::new(ErrorKind::Other, "Mailbox lost contact with actor")
+pub(super) fn lost_contact_error(ctx: impl Display) -> io::Error {
+    warn!(source = %ctx, "Mailbox lost contact with actor that should be running");
+    io::Error::new(
+        ErrorKind::Other,
+        format!("Mailbox lost contact with actor (<{ctx}>)"),
+    )
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -85,6 +89,18 @@ pub struct DirectIoConfig {
     pub io_memory: usize,
     /// The number of threads to spawn as the executor pool.
     pub num_threads: usize,
+}
+
+impl DirectIoConfig {
+    #[cfg(feature = "test-utils")]
+    /// Creates a new config for testing.
+    pub fn default_for_test() -> Self {
+        Self {
+            max_read_concurrency: DEFAULT_MAX_READ_CONCURRENCY,
+            io_memory: 5 << 20,
+            num_threads: 1,
+        }
+    }
 }
 
 impl Default for DirectIoConfig {
@@ -151,7 +167,7 @@ impl DirectIoBackend {
 
         self.schedule_task(task.into()).await?;
 
-        rx.await.map_err(|_| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error("open-writer"))?
     }
 
     #[instrument("open-reader", skip(self))]
@@ -171,14 +187,14 @@ impl DirectIoBackend {
 
         self.schedule_task(task.into()).await?;
 
-        rx.await.map_err(|_| lost_contact_error())?
+        rx.await.map_err(|_| lost_contact_error("open-reader"))?
     }
 
     async fn schedule_task(&self, op: TaskSelector) -> io::Result<()> {
         self.task_submitter
             .send_async(Some(op))
             .await
-            .map_err(|_| lost_contact_error())
+            .map_err(|_| lost_contact_error("task-scheduler"))
     }
 
     /// Waits for the backend threads to shutdown.
@@ -243,9 +259,15 @@ async fn executor_task(
 
     info!("Task executor is running");
 
-    while let Ok(Some(task)) = tasks_rx.recv_async().await {
-        task.spawn().await;
-    }
+    let exit_reason = loop {
+        let res = tasks_rx.recv_async().await;
 
-    info!("Task executor has shutdown");
+        match res {
+            Ok(None) => break "Got shutdown signal",
+            Err(_) => break "Channel dropped",
+            Ok(Some(task)) => task.spawn().await,
+        }
+    };
+
+    info!(exit_reason = exit_reason, "Task executor has shutdown");
 }

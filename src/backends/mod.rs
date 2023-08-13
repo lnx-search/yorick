@@ -27,7 +27,6 @@ type ReadBufferInner = Vec<u8>;
 /// The inner buffer used by reads with a 16 byte alignment.
 type ReadBufferInner = rkyv::AlignedVec;
 
-#[derive(Clone)]
 /// The core storage backend used for completing IO operations on disk.
 pub struct StorageBackend {
     inner: StorageBackendInner,
@@ -35,6 +34,16 @@ pub struct StorageBackend {
 }
 
 impl StorageBackend {
+    /// Clones the storage backend.
+    ///
+    /// This is a private method because cloning the backend without correct handling
+    pub(crate) fn clone_internal(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            writer_tracker: self.writer_tracker.clone(),
+        }
+    }
+
     /// Returns the set of active writers.
     pub fn get_active_writers(&self) -> HashSet<FileKey> {
         self.writer_tracker.get_active()

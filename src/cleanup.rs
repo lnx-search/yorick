@@ -24,8 +24,6 @@ fn cleanup_empty_inner(data_dir: &Path) -> io::Result<()> {
 
         if let Err(e) = maybe_remove_file(&path) {
             warn!(error = ?e, "Failed to consider file cleanup due to error");
-        } else {
-            info!(path = %path.display(), "Cleaned up file");
         }
     }
 
@@ -38,6 +36,7 @@ fn maybe_remove_file(path: &Path) -> io::Result<()> {
 
     if metadata.len() == 0 {
         std::fs::remove_file(path)?;
+        info!(path = %path.display(), "Removed empty file");
     }
 
     Ok(())

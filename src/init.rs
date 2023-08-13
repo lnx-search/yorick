@@ -120,6 +120,7 @@ where
             None => {
                 warn!(
                     invalid_bytes_start = initial_cursor,
+                    file_len = file_len,
                     "Reached EOF while finding next header"
                 );
                 return Ok(());
@@ -137,7 +138,8 @@ where
 
         let info = BlobInfo {
             file_key,
-            start_pos: cursor,
+            // Our cursor includes the data it read to get the header, we want to adjust this.
+            start_pos: cursor - BlobHeader::SIZE as u64,
             total_length: header.total_length() as u32,
             group_id: header.group_id,
             checksum: header.checksum,
@@ -458,5 +460,57 @@ mod tests {
         assert_eq!(times_called, 1, "One header should be retrieved");
 
         std::fs::remove_dir_all(tmp_file.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn test_file_scan_corrupted_recover_data() {
+        let tmp_file =
+            test_utils::temp_dir().join("test_file_scan_corrupted_recover_data1.data");
+
+        let header1 = BlobHeader::new(1, 19, 1, crc32fast::hash(b"Hello from header 1"));
+        let header2 = BlobHeader::new(2, 14, 1, crc32fast::hash(b"Hello header 1"));
+        let header3 = BlobHeader::new(3, 0, 1, crc32fast::hash(&[]));
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header1.as_bytes()).unwrap();
+        file.write_all(b"Hello from header 1").unwrap();
+        file.write_all(SAMPLE).unwrap();
+        file.write_all(&header2.as_bytes()).unwrap();
+        file.write_all(b"Hello header 1").unwrap();
+        file.write_all(&header3.as_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, 0, |blob_id, _| {
+            times_called += 1;
+            assert!(
+                [1, 2, 3].contains(&blob_id),
+                "Blob ID should be in valid list."
+            )
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 3, "Three headers should be retrieved");
+
+        let tmp_file =
+            test_utils::temp_dir().join("test_file_scan_corrupted_recover_data2.data");
+
+        let mut file = File::create(&tmp_file).unwrap();
+        file.write_all(&header1.as_bytes()).unwrap();
+        file.write_all(b"Hello from header 1").unwrap();
+        file.write_all(&header2.as_bytes()).unwrap();
+        file.write_all(b"Hello header 1").unwrap();
+        file.write_all(&header3.as_bytes()).unwrap();
+        file.sync_data().unwrap();
+
+        let mut times_called = 0;
+        scan_file(FileKey(1), &tmp_file, 0, |blob_id, _| {
+            times_called += 1;
+            assert!(
+                [1, 2, 3].contains(&blob_id),
+                "Blob ID should be in valid list."
+            )
+        })
+        .expect("Scan should be ok");
+        assert_eq!(times_called, 3, "Three headers should be retrieved");
     }
 }
