@@ -204,7 +204,10 @@ impl BlobCompactor {
             let start = Instant::now();
             match self.run_compaction().await {
                 Ok(num_bytes) => {
-                    let pretty_printed_size = humansize::format_size(num_bytes.abs() as u64, humansize::DECIMAL);
+                    let pretty_printed_size = humansize::format_size(
+                        num_bytes.abs() as u64,
+                        humansize::DECIMAL,
+                    );
                     let pretty = if num_bytes < 0 {
                         format!("-{pretty_printed_size}")
                     } else {
