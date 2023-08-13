@@ -48,8 +48,18 @@ jobs:
       - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
 
-      - name: Run main tests
+      - if: matrix.os != 'ubuntu-latest'
+        name: Run main tests
+        run: cargo nextest run --workspace --features test-utils --retries 3
+
+      - if: matrix.os != 'ubuntu-latest'
+        name: Run doc tests
+        run: cargo test --doc --workspace --features direct-io-backend --features test-utils
+
+      - if: matrix.os == 'ubuntu-latest'
+        name: Run main tests
         run: cargo nextest run --workspace --features direct-io-backend --features test-utils --retries 3
 
-      - name: Run doc tests
+      - if: matrix.os == 'ubuntu-latest'
+        name: Run doc tests
         run: cargo test --doc --workspace --features direct-io-backend --features test-utils
