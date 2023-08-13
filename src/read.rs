@@ -101,7 +101,7 @@ impl ReaderCache {
             live_readers: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             backend,
             base_path: Arc::new(base_path),
-            limiter: Arc::new(Semaphore::new(1))
+            limiter: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -136,7 +136,9 @@ impl ReaderCache {
             return Ok(reader);
         }
 
-        let _permit = self.limiter.acquire()
+        let _permit = self
+            .limiter
+            .acquire()
             .await
             .map_err(|e| io::Error::new(ErrorKind::Other, e.to_string()))?;
 
