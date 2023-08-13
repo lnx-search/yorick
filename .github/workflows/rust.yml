@@ -59,8 +59,21 @@ jobs:
       - if: matrix.os == 'ubuntu-latest'
         name: Run main tests w/io_uring
         run: |
-          sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && cargo +stable nextest run --features direct-io-backend --features test-utils --retries 3"
+          cat << EOF > "run-gha-workflow.sh"
+          PATH=$PATH:/usr/share/rust/.cargo/bin
+          rustup install stable
+          rustup default stable
+          cargo nextest run --features direct-io-backend --features test-utils --retries 3
+          EOF
+          sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"
 
       - if: matrix.os == 'ubuntu-latest'
         name: Run doc tests w/io_uring
-        run: sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && cargo +stable test --doc --features direct-io-backend --features test-utils"
+        run: |
+          cat << EOF > "run-gha-workflow.sh"
+          PATH=$PATH:/usr/share/rust/.cargo/bin
+          rustup install stable
+          rustup default stable
+          cargo test --doc --features direct-io-backend --features test-utils
+          EOF
+          sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && bash run-gha-workflow.sh"
