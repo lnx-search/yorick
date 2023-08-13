@@ -59,8 +59,8 @@ jobs:
       - if: matrix.os == 'ubuntu-latest'
         name: Run main tests w/io_uring
         run: |
-          sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && cargo nextest run --features direct-io-backend --features test-utils --retries 3"
+          sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && cargo +stable nextest run --features direct-io-backend --features test-utils --retries 3"
 
       - if: matrix.os == 'ubuntu-latest'
         name: Run doc tests w/io_uring
-        run: sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && cargo test --doc --features direct-io-backend --features test-utils"
+        run: sudo env "PATH=$PATH:/usr/share/rust/.cargo/bin" bash -c "ulimit -Sl 512 && ulimit -Hl 512 && cargo +stable test --doc --features direct-io-backend --features test-utils"
