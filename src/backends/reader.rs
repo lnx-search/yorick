@@ -22,8 +22,6 @@ impl FileReader {
     pub async fn read_at(&self, pos: usize, len: usize) -> io::Result<ReadBuffer> {
         self.check_file_not_closed()?;
 
-        trace!("Read bytes");
-
         match &self.inner {
             FileReaderInner::Buffered(reader) => reader.read_at(pos, len).await,
             #[cfg(feature = "direct-io-backend")]

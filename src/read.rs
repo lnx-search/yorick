@@ -1,9 +1,11 @@
 use std::io;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use ahash::{HashMap, HashMapExt};
 use arc_swap::ArcSwap;
+use tokio::sync::Semaphore;
 
 use crate::backends::ReadBuffer;
 use crate::{
@@ -79,6 +81,7 @@ pub(crate) struct ReaderCache {
     live_readers: Arc<ArcSwap<HashMap<FileKey, FileReader>>>,
     backend: StorageBackend,
     base_path: Arc<PathBuf>,
+    limiter: Arc<Semaphore>,
 }
 
 impl Clone for ReaderCache {
@@ -87,6 +90,7 @@ impl Clone for ReaderCache {
             live_readers: self.live_readers.clone(),
             backend: self.backend.clone_internal(),
             base_path: self.base_path.clone(),
+            limiter: self.limiter.clone(),
         }
     }
 }
@@ -97,6 +101,7 @@ impl ReaderCache {
             live_readers: Arc::new(ArcSwap::from_pointee(HashMap::new())),
             backend,
             base_path: Arc::new(base_path),
+            limiter: Arc::new(Semaphore::new(1))
         }
     }
 
@@ -127,7 +132,16 @@ impl ReaderCache {
         file_key: FileKey,
     ) -> io::Result<FileReader> {
         let guard = self.live_readers.load();
+        if let Some(reader) = guard.get(&file_key).cloned() {
+            return Ok(reader);
+        }
 
+        let _permit = self.limiter.acquire()
+            .await
+            .map_err(|e| io::Error::new(ErrorKind::Other, e.to_string()))?;
+
+        // Re-check once we have the permit to see if our reader exists now.
+        let guard = self.live_readers.load();
         if let Some(reader) = guard.get(&file_key).cloned() {
             return Ok(reader);
         }
