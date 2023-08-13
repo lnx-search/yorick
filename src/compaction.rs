@@ -204,9 +204,16 @@ impl BlobCompactor {
             let start = Instant::now();
             match self.run_compaction().await {
                 Ok(num_bytes) => {
+                    let pretty_printed_size = humansize::format_size(num_bytes.abs() as u64, humansize::DECIMAL);
+                    let pretty = if num_bytes < 0 {
+                        format!("-{pretty_printed_size}")
+                    } else {
+                        format!("+{pretty_printed_size}")
+                    };
+
                     info!(
                         reclaimed_bytes = num_bytes,
-                        reclaimed_bytes_pretty = %humansize::format_size(num_bytes, humansize::DECIMAL),
+                        reclaimed_bytes_pretty = %pretty,
                         elapsed = ?start.elapsed(),
                         "Compaction completed"
                     );
@@ -606,15 +613,16 @@ fn get_dead_files(
     lookup.into_iter().collect()
 }
 
-#[instrument("dead-file-gc", skip(files, files_in_use))]
+#[instrument("dead-file-gc", skip(dead_files))]
 /// Removes any files which contain no data currently in the index.
 fn clean_dead_files(
     data_path: &Path,
     dead_files: Vec<(FileKey, u64)>,
 ) -> io::Result<u64> {
     let mut num_bytes_cleaned = 0;
+    let num_dead_files = dead_files.len();
     for (key, size) in dead_files {
-        let path = get_data_file(data_path, *key);
+        let path = get_data_file(data_path, key);
         match std::fs::remove_file(&path) {
             Err(e) => {
                 warn!(path = %path.display(), error = ?e, "Failed to remove dead file due to error");
@@ -628,7 +636,7 @@ fn clean_dead_files(
     }
 
     info!(
-        num_dead_files = lookup.len(),
+        num_dead_files = num_dead_files,
         reclaimed_bytes = num_bytes_cleaned,
         reclaimed_bytes_pretty = %humansize::format_size(num_bytes_cleaned, humansize::DECIMAL),
         "Dead files have been cleaned up"
