@@ -58,8 +58,9 @@ jobs:
 
       - if: matrix.os == 'ubuntu-latest'
         name: Run main tests w/io_uring
-        run: cargo nextest run --features direct-io-backend --features test-utils --retries 3
+        run: |
+          sudo -E bash -c "ulimit -S1 512 && ulimit -H1 512 && cargo nextest run --features direct-io-backend --features test-utils --retries 3"
 
       - if: matrix.os == 'ubuntu-latest'
         name: Run doc tests w/io_uring
-        run: cargo test --doc --features direct-io-backend --features test-utils
+        run: sudo -E bash -c "ulimit -S1 512 && ulimit -H1 512 && cargo test --doc --features direct-io-backend --features test-utils"
