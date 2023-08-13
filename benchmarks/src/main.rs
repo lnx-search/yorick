@@ -26,11 +26,11 @@ async fn main() -> Result<()> {
 
     let buffered_config = BufferedIoConfig::default();
     let buffered_backend = StorageBackend::create_buffered_io(buffered_config).await?;
-    test_write_perf(buffered_backend, 25).await?;
+    test_write_perf(buffered_backend, 5).await?;
 
     let direct_config = DirectIoConfig::default();
     let direct_backend = StorageBackend::create_direct_io(direct_config).await?;
-    test_write_perf(direct_backend, 25).await?;
+    test_write_perf(direct_backend, 5).await?;
 
     Ok(())
 }

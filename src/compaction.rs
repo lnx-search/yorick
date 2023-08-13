@@ -257,6 +257,7 @@ impl BlobCompactor {
 
         info!(
             num_files = files.len(),
+            files = ?files,
             "{} files met compaction criteria",
             files.len()
         );
@@ -278,11 +279,18 @@ impl BlobCompactor {
         {
             let used_files = self.get_files_in_use(file_key);
             let path = self.config.data_path();
-            bytes_reclaimed += tokio::task::spawn_blocking(move || {
+            let (reclaimed, files) = tokio::task::spawn_blocking(move || {
                 clean_dead_files(&path, &files, used_files)
             })
             .await
             .expect("Spawn background thread")?;
+
+            let cache = self.reader.cache();
+            for file in files {
+                cache.forget(file);
+            }
+
+            bytes_reclaimed += reclaimed;
         }
 
         Ok(bytes_reclaimed)
@@ -588,7 +596,7 @@ fn clean_dead_files(
     data_path: &Path,
     files: &[(FileKey, u64)],
     files_in_use: BTreeSet<FileKey>,
-) -> io::Result<u64> {
+) -> io::Result<(u64, Vec<FileKey>)> {
     let mut lookup = HashSet::from_iter(files.iter().map(|v| v.0));
 
     // Remove any files which exist in our index.
@@ -596,6 +604,7 @@ fn clean_dead_files(
         lookup.remove(&file_key);
     }
 
+    let mut removed_files = Vec::new();
     let mut num_bytes_cleaned = 0;
     for (key, size) in files {
         if !lookup.contains(key) {
@@ -609,6 +618,7 @@ fn clean_dead_files(
                 continue;
             },
             Ok(()) => {
+                removed_files.push(*key);
                 num_bytes_cleaned += size;
                 info!(path = %path.display(), "Removed dead file");
             },
@@ -622,7 +632,7 @@ fn clean_dead_files(
         "Dead files have been cleaned up"
     );
 
-    Ok(num_bytes_cleaned)
+    Ok((num_bytes_cleaned, removed_files))
 }
 
 /// Copies a chunk of blobs to the given writer.
