@@ -204,7 +204,6 @@ impl BlobCompactor {
             let start = Instant::now();
             match self.run_compaction().await {
                 Ok(num_bytes) => {
-                    // TODO: Adjust this number so it's actually correct.
                     info!(
                         reclaimed_bytes = num_bytes,
                         reclaimed_bytes_pretty = %humansize::format_size(num_bytes, humansize::DECIMAL),
@@ -239,7 +238,7 @@ impl BlobCompactor {
         });
     }
 
-    async fn run_compaction(&mut self) -> io::Result<u64> {
+    async fn run_compaction(&mut self) -> io::Result<i64> {
         let file_key = match self.policy.get_safe_compact_checkpoint() {
             None => return Ok(0),
             Some(key) => key,
@@ -270,34 +269,36 @@ impl BlobCompactor {
         );
 
         // Actually execute the compactions
+        let mut bytes_written = 0;
         for (i, plan) in plans.into_iter().enumerate() {
-            self.execute_plan(plan).await?;
+            bytes_written += self.execute_plan(plan).await?;
             info!(plan = i + 1, "Completed compaction plan execution");
         }
 
         let mut bytes_reclaimed = 0;
         {
             let used_files = self.get_files_in_use(file_key);
-            let path = self.config.data_path();
-            let (reclaimed, files) = tokio::task::spawn_blocking(move || {
-                clean_dead_files(&path, &files, used_files)
-            })
-            .await
-            .expect("Spawn background thread")?;
+            let dead_files = get_dead_files(&files, used_files);
 
             let cache = self.reader.cache();
-            for file in files {
-                cache.forget(file);
+            for (file, _) in dead_files.iter() {
+                cache.forget(*file);
             }
 
-            bytes_reclaimed += reclaimed;
+            let path = self.config.data_path();
+            bytes_reclaimed +=
+                tokio::task::spawn_blocking(move || clean_dead_files(&path, dead_files))
+                    .await
+                    .expect("Spawn background thread")?;
         }
 
-        Ok(bytes_reclaimed)
+        Ok(bytes_reclaimed as i64 - bytes_written as i64)
     }
 
     /// Executes a merge plan.
-    async fn execute_plan(&mut self, plan: MergePlan) -> io::Result<()> {
+    ///
+    /// Returns the number of bytes written to the file.
+    async fn execute_plan(&mut self, plan: MergePlan) -> io::Result<usize> {
         let file_key = FileKey(self.file_key_counter.inc());
         let data_path = self.config.data_path();
 
@@ -314,7 +315,7 @@ impl BlobCompactor {
         &mut self,
         mut writer: WriteContext,
         blobs: Vec<BlobMetadata>,
-    ) -> io::Result<()> {
+    ) -> io::Result<usize> {
         let config = self.policy.get_config();
         let prefetch = config.needs_data_for_delete;
 
@@ -335,22 +336,29 @@ impl BlobCompactor {
         }
         drop(tx);
 
+        let mut bytes_written = 0;
         while let Ok((header, maybe_buffer)) = rx.recv().await {
             match maybe_buffer {
                 None => writer.mark_delete(header.blob_id),
                 Some(buffer) => {
                     let blob_id = header.blob_id;
+                    let len = buffer.len();
                     let res = writer.write_header_and_data(header, buffer).await;
 
                     if let Err(e) = res {
                         error!(error = ?e, blob_id = blob_id, "Failed to write blob");
                         return Err(e);
                     }
+
+                    bytes_written += len;
+                    bytes_written += BlobHeader::SIZE;
                 },
             }
         }
 
-        writer.commit().await
+        writer.commit().await?;
+
+        Ok(bytes_written)
     }
 
     /// Produces a set of buckets which can be used for compaction.
@@ -576,12 +584,6 @@ fn get_current_file_sizes_before(
             },
         };
 
-        println!(
-            "key: {:?}, file_key < newest_file_key: {}, contains: {}",
-            file_key,
-            file_key < newest_file_key,
-            active_writers.contains(&file_key)
-        );
         if file_key < newest_file_key && !active_writers.contains(&file_key) {
             files.push((file_key, metadata.len()));
         }
@@ -590,27 +592,28 @@ fn get_current_file_sizes_before(
     Ok(files)
 }
 
-#[instrument("dead-file-gc", skip(files, files_in_use))]
-/// Removes any files which contain no data currently in the index.
-fn clean_dead_files(
-    data_path: &Path,
+fn get_dead_files(
     files: &[(FileKey, u64)],
     files_in_use: BTreeSet<FileKey>,
-) -> io::Result<(u64, Vec<FileKey>)> {
-    let mut lookup = HashSet::from_iter(files.iter().map(|v| v.0));
+) -> Vec<(FileKey, u64)> {
+    let mut lookup = HashMap::from_iter(files.iter().copied());
 
     // Remove any files which exist in our index.
     for file_key in files_in_use {
         lookup.remove(&file_key);
     }
 
-    let mut removed_files = Vec::new();
-    let mut num_bytes_cleaned = 0;
-    for (key, size) in files {
-        if !lookup.contains(key) {
-            continue;
-        }
+    lookup.into_iter().collect()
+}
 
+#[instrument("dead-file-gc", skip(files, files_in_use))]
+/// Removes any files which contain no data currently in the index.
+fn clean_dead_files(
+    data_path: &Path,
+    dead_files: Vec<(FileKey, u64)>,
+) -> io::Result<u64> {
+    let mut num_bytes_cleaned = 0;
+    for (key, size) in dead_files {
         let path = get_data_file(data_path, *key);
         match std::fs::remove_file(&path) {
             Err(e) => {
@@ -618,7 +621,6 @@ fn clean_dead_files(
                 continue;
             },
             Ok(()) => {
-                removed_files.push(*key);
                 num_bytes_cleaned += size;
                 info!(path = %path.display(), "Removed dead file");
             },
@@ -632,7 +634,7 @@ fn clean_dead_files(
         "Dead files have been cleaned up"
     );
 
-    Ok((num_bytes_cleaned, removed_files))
+    Ok(num_bytes_cleaned)
 }
 
 /// Copies a chunk of blobs to the given writer.

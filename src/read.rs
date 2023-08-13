@@ -107,7 +107,7 @@ impl ReaderCache {
 
     #[instrument("reader-cache", skip(self))]
     /// Tells the cache to forget about a specific reader.
-    pub(crate) fn forget(&self, file_key: FileKey) {
+    pub(crate) fn forget_for_reloading(&self, file_key: FileKey) {
         let guard = self.live_readers.load();
         let remove = if let Some(reader) = guard.get(&file_key) {
             reader.needs_manual_reload()
@@ -116,13 +116,19 @@ impl ReaderCache {
         };
 
         if remove {
-            debug!(file_key = ?file_key, "Forgetting reader");
-            self.live_readers.rcu(|readers| {
-                let mut readers = HashMap::clone(readers);
-                readers.remove(&file_key);
-                readers
-            });
+            self.forget(file_key);
         }
+    }
+
+    #[instrument("reader-cache", skip(self))]
+    /// Tells the cache to forget about a specific reader.
+    pub(crate) fn forget(&self, file_key: FileKey) {
+        debug!(file_key = ?file_key, "Forgetting reader");
+        self.live_readers.rcu(|readers| {
+            let mut readers = HashMap::clone(readers);
+            readers.remove(&file_key);
+            readers
+        });
     }
 
     #[instrument("reader-cache", skip(self))]

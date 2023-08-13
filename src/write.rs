@@ -106,7 +106,7 @@ impl WriteContext {
 
             let file_key = self.file_writer.file_key();
             // Reflect the changes to readers.
-            self.read_context.cache().forget(file_key);
+            self.read_context.cache().forget_for_reloading(file_key);
 
             {
                 let writer = self.read_context.blob_index().writer();
