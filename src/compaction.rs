@@ -579,7 +579,7 @@ fn clean_dead_files(
             continue;
         }
 
-        let path = get_data_file(&data_path, *key);
+        let path = get_data_file(data_path, *key);
         match std::fs::remove_file(&path) {
             Err(e) => {
                 warn!(path = %path.display(), error = ?e, "Failed to remove dead file due to error");
