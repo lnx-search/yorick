@@ -97,7 +97,7 @@ impl DirectIoConfig {
     pub fn default_for_test() -> Self {
         Self {
             max_read_concurrency: DEFAULT_MAX_READ_CONCURRENCY,
-            io_memory: 512 << 10,
+            io_memory: 5 << 20,
             num_threads: 1,
         }
     }
