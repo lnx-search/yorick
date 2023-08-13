@@ -112,6 +112,7 @@ struct Tracker {
 
 impl Drop for Tracker {
     fn drop(&mut self) {
+        debug!(file_key = ?self.iam, "Writer has closed");
         self.active.write().remove(&self.iam);
     }
 }

@@ -59,6 +59,7 @@ impl StorageBackend {
         })
     }
 
+    #[instrument("open-writer", skip(self))]
     /// Opens a new file writer.
     ///
     /// If the file does not already exist, it is created.
@@ -67,6 +68,7 @@ impl StorageBackend {
         file_key: FileKey,
         path: &Path,
     ) -> io::Result<FileWriter> {
+        info!("Open writer");
         let tracker = self.writer_tracker.create_tracker(file_key);
         match &self.inner {
             StorageBackendInner::BufferedIo(backend) => backend
@@ -81,12 +83,14 @@ impl StorageBackend {
         }
     }
 
+    #[instrument("open-reader", skip(self))]
     /// Opens an existing file for reading.
     pub async fn open_reader(
         &self,
         file_key: FileKey,
         path: &Path,
     ) -> io::Result<FileReader> {
+        debug!("Open reader");
         match &self.inner {
             StorageBackendInner::BufferedIo(backend) => backend
                 .open_reader(file_key, path)

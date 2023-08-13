@@ -381,7 +381,7 @@ impl BlobCompactor {
                     blobs: Vec::with_capacity(1),
                 });
 
-            bucket.total_size_approx += info.len() as u64;
+            bucket.total_size_approx += info.total_length() as u64;
             bucket.blobs.push(BlobMetadata {
                 id: *id,
                 info: *info,
@@ -616,7 +616,7 @@ async fn copy_blob_data_chunk(
 
         let header = BlobHeader::new_with_merges(
             blob.id,
-            blob.info.len,
+            blob.info.total_length,
             blob.info.group_id,
             blob.info.checksum,
             blob.info.merge_counter + 1,
@@ -642,7 +642,7 @@ async fn fetch_and_check_against_policy(
 ) -> io::Result<Option<ReadBuffer>> {
     let file_reader = reader.get_or_create(blob.info.file_key).await?;
     let pos = blob.info.start_pos;
-    let len = blob.info.len;
+    let len = blob.info.total_length;
 
     // We can potentially save some reads when handling deletes if we only
     // fetch the data that we need.
@@ -678,7 +678,7 @@ mod tests {
                     id: 1,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 18,
+                        total_length: 18,
                         ..Default::default()
                     },
                 },
@@ -686,7 +686,7 @@ mod tests {
                     id: 1,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 12,
+                        total_length: 12,
                         ..Default::default()
                     },
                 },
@@ -694,7 +694,7 @@ mod tests {
                     id: 1,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 20,
+                        total_length: 20,
                         ..Default::default()
                     },
                 },
@@ -712,7 +712,7 @@ mod tests {
                         id: 1,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 18,
+                            total_length: 18,
                             ..Default::default()
                         },
                     },
@@ -720,7 +720,7 @@ mod tests {
                         id: 1,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 12,
+                            total_length: 12,
                             ..Default::default()
                         },
                     },
@@ -728,7 +728,7 @@ mod tests {
                         id: 1,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 20,
+                            total_length: 20,
                             ..Default::default()
                         },
                     },
@@ -756,7 +756,7 @@ mod tests {
                     id: 1,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 18,
+                        total_length: 18,
                         ..Default::default()
                     },
                 },
@@ -764,7 +764,7 @@ mod tests {
                     id: 1,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 12,
+                        total_length: 12,
                         ..Default::default()
                     },
                 },
@@ -772,7 +772,7 @@ mod tests {
                     id: 1,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 20,
+                        total_length: 20,
                         ..Default::default()
                     },
                 },
@@ -790,7 +790,7 @@ mod tests {
                         id: 1,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 18,
+                            total_length: 18,
                             ..Default::default()
                         },
                     },
@@ -798,7 +798,7 @@ mod tests {
                         id: 1,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 12,
+                            total_length: 12,
                             ..Default::default()
                         },
                     },
@@ -806,7 +806,7 @@ mod tests {
                         id: 1,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 20,
+                            total_length: 20,
                             ..Default::default()
                         },
                     },
@@ -827,7 +827,7 @@ mod tests {
                         id: 1,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 18,
+                            total_length: 18,
                             ..Default::default()
                         },
                     },
@@ -835,7 +835,7 @@ mod tests {
                         id: 2,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 12,
+                            total_length: 12,
                             ..Default::default()
                         },
                     },
@@ -849,7 +849,7 @@ mod tests {
                     id: 3,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 20,
+                        total_length: 20,
                         ..Default::default()
                     },
                 }],
@@ -862,7 +862,7 @@ mod tests {
                     id: 4,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 20,
+                        total_length: 20,
                         ..Default::default()
                     },
                 }],
@@ -881,7 +881,7 @@ mod tests {
                             id: 1,
                             info: BlobInfo {
                                 file_key: FileKey(1),
-                                len: 18,
+                                total_length: 18,
                                 ..Default::default()
                             },
                         },
@@ -889,7 +889,7 @@ mod tests {
                             id: 2,
                             info: BlobInfo {
                                 file_key: FileKey(1),
-                                len: 12,
+                                total_length: 12,
                                 ..Default::default()
                             },
                         },
@@ -903,7 +903,7 @@ mod tests {
                             id: 3,
                             info: BlobInfo {
                                 file_key: FileKey(1),
-                                len: 20,
+                                total_length: 20,
                                 ..Default::default()
                             },
                         },
@@ -911,7 +911,7 @@ mod tests {
                             id: 4,
                             info: BlobInfo {
                                 file_key: FileKey(1),
-                                len: 20,
+                                total_length: 20,
                                 ..Default::default()
                             },
                         },
@@ -932,7 +932,7 @@ mod tests {
                     id: 1,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 18,
+                        total_length: 18,
                         group_id: 0,
                         ..Default::default()
                     },
@@ -946,7 +946,7 @@ mod tests {
                     id: 3,
                     info: BlobInfo {
                         file_key: FileKey(1),
-                        len: 20,
+                        total_length: 20,
                         group_id: 1,
                         ..Default::default()
                     },
@@ -960,7 +960,7 @@ mod tests {
                     id: 4,
                     info: BlobInfo {
                         file_key: FileKey(2),
-                        len: 20,
+                        total_length: 20,
                         ..Default::default()
                     },
                 }],
@@ -979,7 +979,7 @@ mod tests {
                             id: 1,
                             info: BlobInfo {
                                 file_key: FileKey(1),
-                                len: 18,
+                                total_length: 18,
                                 group_id: 0,
                                 ..Default::default()
                             },
@@ -988,7 +988,7 @@ mod tests {
                             id: 4,
                             info: BlobInfo {
                                 file_key: FileKey(2),
-                                len: 20,
+                                total_length: 20,
                                 group_id: 0,
                                 ..Default::default()
                             },
@@ -1002,7 +1002,7 @@ mod tests {
                         id: 3,
                         info: BlobInfo {
                             file_key: FileKey(1),
-                            len: 20,
+                            total_length: 20,
                             group_id: 1,
                             ..Default::default()
                         },

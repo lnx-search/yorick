@@ -47,7 +47,6 @@ impl Reader {
         })
     }
 
-    #[instrument("reader", skip(self), fields(file_key = ?self.file_key))]
     /// Performs a random read on the file at the given position reading `len` bytes.
     pub async fn read_at(&self, pos: usize, len: usize) -> io::Result<ReadBuffer> {
         let (tx, rx) = oneshot::channel();
@@ -70,7 +69,7 @@ impl Reader {
         });
 
         rx.await.expect("Threadpool should never die").map_err(|e| {
-            error!(error = ?e, "Failed to perform read op");
+            error!(file_key = ?self.file_key, error = ?e, "Failed to perform read op");
             e
         })
     }

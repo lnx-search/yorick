@@ -259,6 +259,7 @@ impl WriteId {
 }
 
 #[derive(Debug, Copy, Clone)]
+#[cfg_attr(test, derive(Eq, PartialEq))]
 /// A metadata header for each blob entry.
 pub struct BlobHeader {
     /// A city hash checksum of the blob header.
@@ -428,5 +429,20 @@ mod tests {
         entries.sort();
 
         assert_eq!(entries, [id1, id3, id2], "Write IDs should sort correctly");
+    }
+
+    #[test]
+    fn test_header_serialization() {
+        let header = BlobHeader::new(1, 0, 3, 0);
+        let bytes = header.as_bytes();
+        assert_eq!(bytes.len(), 34);
+        let recovered = BlobHeader::from_bytes(bytes);
+        assert_eq!(recovered.unwrap(), header, "Headers should match");
+
+        let header = BlobHeader::new_with_merges(0, 0, 0, 0, 55);
+        let bytes = header.as_bytes();
+        assert_eq!(bytes.len(), 34);
+        let recovered = BlobHeader::from_bytes(bytes);
+        assert_eq!(recovered.unwrap(), header, "Headers should match");
     }
 }

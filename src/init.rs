@@ -138,7 +138,7 @@ where
         let info = BlobInfo {
             file_key,
             start_pos: cursor,
-            len: header.total_length() as u32,
+            total_length: header.total_length() as u32,
             group_id: header.group_id,
             checksum: header.checksum,
             merge_counter: header.merge_counter,
@@ -201,7 +201,7 @@ fn get_max_file_position_from_current_index(
 
         for (_, info) in guard.iter() {
             let info = info.get_one().unwrap();
-            let end = info.start_pos() + info.len() as u64;
+            let end = info.end_pos();
 
             max_file_positions
                 .entry(info.file_key())

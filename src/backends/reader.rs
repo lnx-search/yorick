@@ -17,9 +17,12 @@ pub struct FileReader {
 }
 
 impl FileReader {
+    #[instrument("read-at", skip(self))]
     /// Performs a random read on the file at a given position, reading upto `len` bytes.
     pub async fn read_at(&self, pos: usize, len: usize) -> io::Result<ReadBuffer> {
         self.check_file_not_closed()?;
+
+        trace!("Read bytes");
 
         match &self.inner {
             FileReaderInner::Buffered(reader) => reader.read_at(pos, len).await,
@@ -28,12 +31,15 @@ impl FileReader {
         }
     }
 
+    #[instrument("reader-close", skip(self))]
     /// Closes the currently open file.
     ///
     /// Once a file is closed no more operations can be completed on it and will
     /// begin to return errors.
     pub async fn close(&self) -> io::Result<()> {
         self.check_file_not_closed()?;
+
+        trace!("Closing reader");
 
         let res = match &self.inner {
             #[cfg(feature = "direct-io-backend")]

@@ -57,7 +57,7 @@ impl ReadContext {
 
         let reader = self.readers.get_or_create(info.file_key).await?;
         reader
-            .read_at(info.start_pos() as usize, info.len() as usize)
+            .read_at(info.start_pos() as usize, info.total_length() as usize)
             .await
             .map(|data| Some(ReadResult { info, data }))
     }
@@ -125,8 +125,6 @@ impl ReaderCache {
 
         let path = get_data_file(&self.base_path, file_key);
         let reader = self.backend.open_reader(file_key, &path).await?;
-
-        debug!("Created new reader");
 
         self.live_readers.rcu(|readers| {
             let mut readers = HashMap::clone(readers);

@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use rkyv::{AlignedVec, Archive, Deserialize, Serialize};
 
 use crate::tools::KillSwitch;
-use crate::{get_snapshot_file, BlobId, FileKey, WriteId};
+use crate::{get_snapshot_file, BlobHeader, BlobId, FileKey, WriteId};
 
 type ReadHandle = evmap::handles::ReadHandle<BlobId, BlobInfo, (), RandomState>;
 type WriteHandle = evmap::handles::WriteHandle<BlobId, BlobInfo, (), RandomState>;
@@ -232,7 +232,7 @@ pub struct BlobInfo {
     /// The start position in the file of the blob.
     pub(crate) start_pos: u64,
     /// The length of the blob INCLUDING the header.
-    pub(crate) len: u32,
+    pub(crate) total_length: u32,
     /// The ID of the group the blob belongs to.
     pub(crate) group_id: u64,
     /// The checksum of the blob data.
@@ -242,6 +242,25 @@ pub struct BlobInfo {
 }
 
 impl BlobInfo {
+    pub(crate) fn using_write_id(
+        write_id: WriteId,
+        blob_length: u32,
+        group_id: u64,
+        checksum: u32,
+        merge_counter: u32,
+    ) -> Self {
+        let start_pos = write_id.end_pos - blob_length as u64 - BlobHeader::SIZE as u64;
+        let len = write_id.end_pos - start_pos;
+        Self {
+            file_key: write_id.file_key,
+            start_pos,
+            total_length: len as u32,
+            group_id,
+            checksum,
+            merge_counter,
+        }
+    }
+
     #[inline]
     /// The unique file ID of where the blob is stored.
     pub fn file_key(&self) -> FileKey {
@@ -249,21 +268,33 @@ impl BlobInfo {
     }
 
     #[inline]
-    /// The start position in the file of the blob.
+    /// The start position of the blob data in the file.
     pub fn start_pos(&self) -> u64 {
         self.start_pos
     }
 
     #[inline]
+    /// The end position of the blob data in the file.
+    pub fn end_pos(&self) -> u64 {
+        self.start_pos + self.total_length as u64
+    }
+
+    #[inline]
+    /// The length of the blob + header.
+    pub fn total_length(&self) -> u32 {
+        self.total_length
+    }
+
+    #[inline]
     /// The length of the blob.
-    pub fn len(&self) -> u32 {
-        self.len
+    pub fn blob_length(&self) -> u32 {
+        self.total_length - BlobHeader::SIZE as u32
     }
 
     #[inline]
     /// Returns if the blob is empty
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.total_length == 0
     }
 
     #[inline]
@@ -457,7 +488,7 @@ mod tests {
                 BlobInfo {
                     file_key: FileKey(1),
                     start_pos: 0,
-                    len: 3,
+                    total_length: 3,
                     group_id: 0,
                     checksum: 0,
                     merge_counter: 0,
@@ -468,7 +499,7 @@ mod tests {
                 BlobInfo {
                     file_key: FileKey(1),
                     start_pos: 0,
-                    len: 3,
+                    total_length: 3,
                     group_id: 0,
                     checksum: 0,
                     merge_counter: 0,
@@ -479,7 +510,7 @@ mod tests {
                 BlobInfo {
                     file_key: FileKey(1),
                     start_pos: 0,
-                    len: 3,
+                    total_length: 3,
                     group_id: 0,
                     checksum: 0,
                     merge_counter: 0,
@@ -509,7 +540,7 @@ mod tests {
                 BlobInfo {
                     file_key: FileKey(1),
                     start_pos: 0,
-                    len: 3,
+                    total_length: 3,
                     group_id: 0,
                     checksum: 0,
                     merge_counter: 0,
@@ -520,7 +551,7 @@ mod tests {
                 BlobInfo {
                     file_key: FileKey(1),
                     start_pos: 0,
-                    len: 3,
+                    total_length: 3,
                     group_id: 0,
                     checksum: 0,
                     merge_counter: 0,
@@ -531,7 +562,7 @@ mod tests {
                 BlobInfo {
                     file_key: FileKey(1),
                     start_pos: 0,
-                    len: 3,
+                    total_length: 3,
                     group_id: 0,
                     checksum: 0,
                     merge_counter: 0,

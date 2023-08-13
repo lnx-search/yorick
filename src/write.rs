@@ -76,14 +76,14 @@ impl WriteContext {
         let len = header.blob_length();
         let write_id = self.file_writer.write_blob(header, buffer).await?;
 
-        let info = BlobInfo {
-            file_key: write_id.file_key,
-            start_pos: write_id.end_pos - len as u64,
-            len: len as u32,
-            group_id: header.group_id,
-            checksum: header.checksum,
-            merge_counter: header.merge_counter,
-        };
+        let info = BlobInfo::using_write_id(
+            write_id,
+            len as u32,
+            header.group_id,
+            header.checksum,
+            header.merge_counter,
+        );
+
         self.queued_changes.push((header.blob_id, info));
 
         self.did_op = true;
