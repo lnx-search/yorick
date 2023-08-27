@@ -322,6 +322,8 @@ impl BlobCompactor {
 
         let writer_path = get_data_file(&data_path, file_key);
         let writer = self.backend.open_writer(file_key, &writer_path).await?;
+        self.policy.on_merge_file_creation(file_key);
+
         let write_context = WriteContext::new(self.reader.clone(), writer);
 
         self.copy_blobs_to_writer(write_context, plan.copy_blobs)

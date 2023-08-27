@@ -30,6 +30,7 @@ mod write;
 pub use self::backends::DirectIoConfig;
 pub use self::backends::{BufferedIoConfig, FileReader, FileWriter, StorageBackend};
 pub use self::compaction::{
+    CompactionConfig,
     CompactionPolicy,
     DefaultCompactionPolicy,
     NoCompactionPolicy,
