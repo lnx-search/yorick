@@ -13,9 +13,9 @@ use tokio::io;
 
 use crate::compaction::{BlobCompactor, CompactorController};
 use crate::index::IndexBackgroundSnapshotter;
-use crate::read::{ReadContext, ReaderCache};
+use crate::read::ReaderCache;
 use crate::tools::{KillSwitch, LockingCounter};
-use crate::write::{ActiveWriter, WriteContext, WriterSizeController};
+use crate::write::{ActiveWriter, WriterSizeController};
 
 mod backends;
 mod cleanup;
@@ -42,6 +42,8 @@ pub use self::compaction::{
     NoCompactionPolicy,
 };
 pub use self::index::{BlobIndex, BlobInfo};
+pub use self::read::ReadContext;
+pub use self::write::WriteContext;
 
 /// The unique ID for a given blob.
 pub type BlobId = u64;
