@@ -28,7 +28,13 @@ mod write;
 
 #[cfg(feature = "direct-io-backend")]
 pub use self::backends::DirectIoConfig;
-pub use self::backends::{BufferedIoConfig, FileReader, FileWriter, StorageBackend, ReadBuffer};
+pub use self::backends::{
+    BufferedIoConfig,
+    FileReader,
+    FileWriter,
+    ReadBuffer,
+    StorageBackend,
+};
 pub use self::compaction::{
     CompactionConfig,
     CompactionPolicy,
@@ -260,6 +266,7 @@ impl Drop for ShutdownHooks {
 #[derive(
     Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Archive, Serialize, Deserialize,
 )]
+#[archive(check_bytes)]
 #[cfg_attr(test, derive(Default))]
 /// A unique identifier for a given file.
 pub struct FileKey(pub(crate) u32);
@@ -282,6 +289,7 @@ impl Hash for FileKey {
     Serialize,
     Deserialize,
 )]
+#[archive(check_bytes)]
 /// A unique cursor into the completed operation.
 ///
 /// This ID is able to be sorted.
