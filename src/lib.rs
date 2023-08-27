@@ -28,7 +28,7 @@ mod write;
 
 #[cfg(feature = "direct-io-backend")]
 pub use self::backends::DirectIoConfig;
-pub use self::backends::{BufferedIoConfig, FileReader, FileWriter, StorageBackend};
+pub use self::backends::{BufferedIoConfig, FileReader, FileWriter, StorageBackend, ReadBuffer};
 pub use self::compaction::{
     CompactionConfig,
     CompactionPolicy,
