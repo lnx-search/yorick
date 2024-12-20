@@ -1,3 +1,7 @@
+# ARCHIVED
+
+This project has become `lnx-fs` to some extent.
+
 # Yorick
 
 Yorick is a basic blob storage system for writing blocks of and having stable identifiers to retrieve the block.
